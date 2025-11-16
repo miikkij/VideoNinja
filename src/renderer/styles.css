@@ -52,6 +52,10 @@ header h1 {
   opacity: 0.95;
   font-weight: 400;
   -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .close-btn {
