@@ -374,6 +374,26 @@ ipcMain.on('hide-window', (event) => {
   }
 });
 
+/**
+ * Toggle startup
+ */
+ipcMain.handle('toggle-startup', async () => {
+  try {
+    const isEnabled = await autoLauncher.isEnabled();
+    
+    if (isEnabled) {
+      await autoLauncher.disable();
+      return { enabled: false };
+    } else {
+      await autoLauncher.enable();
+      return { enabled: true };
+    }
+  } catch (error) {
+    console.error('Error toggling startup:', error);
+    return { enabled: false, error: error.message };
+  }
+});
+
 // ===== DOWNLOAD QUEUE EVENTS =====
 
 downloadQueue.on('queue-updated', (state) => {
