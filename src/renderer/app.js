@@ -68,6 +68,85 @@ ipcRenderer.on('queue-updated', (event, state) => {
   updateDownloadsList();
 });
 
+// Listen for download started
+ipcRenderer.on('download-started', (event, download) => {
+  const startQuotes = [
+    'Let the download begin! 🥷',
+    'Downloading jutsu activated! ⚡',
+    'Shadow Clone is fetching your video! 📥',
+    'Rasengan spin... I mean, download starting! 🌀',
+    'The ninja way: patience during download! 🍃',
+    'Believe it! Download starting, dattebayo! 🍥',
+    'Kakashi-sensei says: Copy that video! 📋',
+    'Download mission accepted! 🎯',
+    'Pervy Sage needs this for... research! 📖',
+    'Summoning Jutsu: Video Download! 🦊',
+    'The path of downloads is never easy... ⏬',
+    'DYNAMIC DOWNLOAD! 💥',
+    'Going into Sage Mode... download mode! 🐸',
+    'Sharingan copying the video! 👁️',
+    'The Will of Fire... to download! 🔥',
+    'Team 7 is on the mission! 👊',
+    'Downloading faster than Minato\'s Flash! ⚡',
+    'Ichiraku Ramen can wait, downloading first! 🍜',
+    'Talk no Jutsu failed, using Download Jutsu! 💬',
+    'The legendary download begins! 🌟'
+  ];
+  const quote = startQuotes[Math.floor(Math.random() * startQuotes.length)];
+  showNotification('🥷 Download Started', quote, 'info');
+});
+
+// Listen for download completed
+ipcRenderer.on('download-completed', (event, download) => {
+  const completeQuotes = [
+    'Mission accomplished! DATTEBAYO! 🎉',
+    'Download complete! Believe it! ✨',
+    'Perfect download! Just like my Rasengan! 💯',
+    'Success! The ninja way prevails! 🥷',
+    'Download finished! Time for ramen! 🍜',
+    'Kakashi would be proud of this speed! 👍',
+    'Victory! The video is ours! 🏆',
+    'Download complete! Godly timing! ⚡',
+    'The scroll has been acquired! 📜',
+    'Mission success! Pervy Sage approves! 😏',
+    'Downloaded! Now that\'s some good research material! 📚',
+    'Flawless execution! Shinobi style! 🎯',
+    'The download is complete, my student! 🙏',
+    'Success rate: 100%! Like my jutsu! 💪',
+    'Video acquired! The legend continues! 🌟',
+    'Download finished faster than I became Hokage! 🔥',
+    'Perfect! Time to watch with Hinata-chan! 💕',
+    'Mission complete! Shadow clones helped! 🥷🥷',
+    'The video is in our possession! 📹',
+    'Download success! That\'s my ninja way! ✌️'
+  ];
+  const quote = completeQuotes[Math.floor(Math.random() * completeQuotes.length)];
+  showNotification('🎊 Download Complete!', quote, 'success');
+});
+
+// Listen for download failed
+ipcRenderer.on('download-failed', (event, download) => {
+  const failQuotes = [
+    'Download failed... but I never give up! 💪',
+    'Temporary setback! The ninja way is to try again! 🔄',
+    'Failed? Time to use my secret technique: Retry! 🥷',
+    'Even Naruto failed many times before succeeding! 💭',
+    'This is just training! Let\'s try again! 🎯',
+    'Download interrupted... like my Rasengan training! 😅',
+    'Believe it or not, we\'ll get it next time! 🍥',
+    'Even the Hokage faces failures! Retry! 🔥',
+    'The path of downloads has obstacles... 🌊',
+    'Pervy Sage says: Learn from mistakes! 📖',
+    'Failed download is just another lesson! 📚',
+    'The ninja never gives up! Trying again! 💪',
+    'Shadow Clone failed, but real ninja persists! 🥷',
+    'Even the best jutsu fails sometimes! 🌀',
+    'This is not defeat, just a detour! 🛤️'
+  ];
+  const quote = failQuotes[Math.floor(Math.random() * failQuotes.length)];
+  showNotification('⚠️ Download Failed', quote, 'error');
+});
+
 // Listen for download progress
 ipcRenderer.on('download-progress', (event, progress) => {
   updateDownloadProgress(progress);
@@ -160,7 +239,20 @@ startDownloadBtn.addEventListener('click', () => {
   // Clear input
   videoUrlInput.value = '';
   
-  showNotification('✅ Added to Queue', 'Download will start soon', 'success');
+  const addQuotes = [
+    'Added to queue! Ninja patience required! ⏳',
+    'Video queued up! Like waiting for Kakashi-sensei! ⏰',
+    'In the queue, believe it! 🍥',
+    'Your video is next in line! 📋',
+    'Queued! The download will start soon! 🎯',
+    'Added! Shadow clones are preparing! 🥷',
+    'Queue updated! The mission begins shortly! 🌟',
+    'Patience, young ninja! It\'s in the queue! 🍃',
+    'Added successfully! Just like my jutsu! ✨',
+    'Video queued! Time for some ramen while waiting! 🍜'
+  ];
+  const quote = addQuotes[Math.floor(Math.random() * addQuotes.length)];
+  showNotification('✅ Added to Queue', quote, 'success');
 });
 
 // Handle external links
