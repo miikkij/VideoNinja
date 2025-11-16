@@ -3,42 +3,104 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Fatalii's Daily Offers</title>
+  <title>VideoNinja - YouTube Downloader</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>🌶️ Fatalii's Daily Offers</h1>
-      <p class="subtitle">Today's varieties with 20% discount</p>
-      <button class="close-btn" id="close-btn">✕</button>
+      <h1>🎬 VideoNinja</h1>
+      <p class="subtitle">YouTube Video Downloader</p>
     </header>
 
-    <div id="loading" class="loading">
-      <div class="spinner"></div>
-      <p>Loading today's offers...</p>
-    </div>
-
-    <div id="error" class="error" style="display: none;">
-      <p>❌ Unable to load offers. Please try again later.</p>
-    </div>
-
-    <div id="offers-container" class="offers-container">
-      <!-- Products will be inserted here by JavaScript -->
-    </div>
-
-    <div id="actions" class="actions" style="display: none;">
-      <button id="add-all-btn" class="btn btn-primary btn-large">
-        🛒 Add All to Cart
-      </button>
-    </div>
-
-    <footer>
-      <div class="coupon-reminder">
-        💡 <strong>Use coupon code: DAILY20</strong><br>
-        at fataliiseeds.net to get 20% discount with these products
+    <!-- yt-dlp Not Found Screen -->
+    <div id="ytdlp-missing" class="ytdlp-missing" style="display: none;">
+      <div class="warning-icon">⚠️</div>
+      <h2>yt-dlp Not Found</h2>
+      <p>VideoNinja requires yt-dlp to download videos.</p>
+      
+      <div class="install-instructions">
+        <h3>📦 Installation Instructions</h3>
+        
+        <div class="platform-instructions">
+          <h4>Windows:</h4>
+          <ol>
+            <li>Download yt-dlp.exe from <a href="#" class="link" data-url="https://github.com/yt-dlp/yt-dlp/releases">GitHub Releases</a></li>
+            <li>Place it in a folder (e.g., C:\Program Files\yt-dlp\)</li>
+            <li>Add the folder to your PATH, or</li>
+            <li>Place yt-dlp.exe in the same folder as VideoNinja</li>
+          </ol>
+        </div>
+        
+        <div class="platform-instructions mac-placeholder">
+          <h4>macOS: (Coming Soon)</h4>
+          <p>macOS support is planned for a future release.</p>
+          <p>For now, you can install yt-dlp via:</p>
+          <code>brew install yt-dlp</code>
+        </div>
       </div>
-    </footer>
+      
+      <button id="retry-ytdlp" class="btn btn-primary">🔄 Check Again</button>
+    </div>
+
+    <!-- Settings Panel -->
+    <div id="settings-panel" class="settings-panel" style="display: none;">
+      <h2>⚙️ Settings</h2>
+      
+      <div class="setting-item">
+        <label>yt-dlp Location:</label>
+        <input type="text" id="ytdlp-path" readonly class="input-readonly">
+      </div>
+      
+      <div class="setting-item">
+        <label>Download Folder:</label>
+        <div class="input-with-button">
+          <input type="text" id="download-path" readonly class="input-readonly">
+          <button id="choose-folder-btn" class="btn btn-secondary">📁 Choose</button>
+        </div>
+      </div>
+      
+      <div class="disk-space" id="disk-space" style="display: none;">
+        <span class="disk-space-label">Disk Space:</span>
+        <span class="disk-space-value" id="disk-space-value">--</span>
+      </div>
+    </div>
+
+    <!-- Download Panel -->
+    <div id="download-panel" class="download-panel" style="display: none;">
+      <h2>📥 Download Video</h2>
+      
+      <div class="download-form">
+        <input type="text" id="video-url" placeholder="Paste YouTube URL here..." class="input-url">
+        
+        <div class="download-options">
+          <select id="quality-select" class="select">
+            <option value="">Best Quality (default)</option>
+            <option value="bestvideo[height<=4320]+bestaudio/best">4K (2160p)</option>
+            <option value="bestvideo[height<=2160]+bestaudio/best">1440p</option>
+            <option value="bestvideo[height<=1080]+bestaudio/best">1080p</option>
+            <option value="bestvideo[height<=720]+bestaudio/best">720p</option>
+            <option value="bestvideo[height<=480]+bestaudio/best">480p</option>
+            <option value="bestaudio/best">Audio Only</option>
+          </select>
+          
+          <button id="start-download-btn" class="btn btn-primary">⬇️ Start Download</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Download Queue & History -->
+    <div id="downloads-list" class="downloads-list" style="display: none;">
+      <h2>📋 Downloads</h2>
+      <div id="downloads-container" class="downloads-container">
+        <!-- Downloads will be inserted here -->
+      </div>
+    </div>
+
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p>Initializing...</p>
+    </div>
   </div>
 
   <script src="app.js"></script>

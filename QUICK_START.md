@@ -1,187 +1,145 @@
-# 🚀 PIKAOPAS - Quick Start
+# 🚀 VideoNinja - Quick Start Guide
 
-## 1. Asenna riippuvuudet / Install Dependencies
+## Prerequisites
 
-Avaa terminaali tässä kansiossa ja aja:
+Before running VideoNinja, you need to install **yt-dlp**.
 
-```bash
-npm install
-```
+### Installing yt-dlp on Windows
 
-Tämä asentaa:
-- Electron (desktop app framework)
-- Cheerio (web scraping)
-- Axios (HTTP requests)
-- electron-store (tallentaa asetukset)
-- electron-builder (builds installers)
+1. **Download yt-dlp.exe**
+   - Go to: https://github.com/yt-dlp/yt-dlp/releases
+   - Download `yt-dlp.exe`
 
-⏱️ Kestää noin 2-3 minuuttia ensimmäisellä kerralla.
+2. **Place yt-dlp.exe** in one of these locations:
+   - Same folder as VideoNinja
+   - `C:\Program Files\yt-dlp\`
+   - Any folder in your PATH
 
----
-
-## 2. Käynnistä sovellus / Start the App
+### Installing yt-dlp on macOS (Planned)
 
 ```bash
-npm start
-```
-
-Näet:
-- ✅ Punaisen pallon system tray:ssä (placeholder icon)
-- 🔄 Jos vilkkuu punainen/oranssi = uudet tarjoukset saatavilla
-- 👆 Klikkaa ikonia = avaa tarjousikkuna
-
----
-
-## 3. Testaa toiminnallisuudet / Test Features
-
-### Left Click Icon
-- Avaa popup-ikkunan päivän tarjouksilla
-- Näyttää 3 tuotetta kuvilla ja tulisuudella
-- "Add to Cart" nappi per tuote
-- "Add All to Cart" nappi
-
-### Right Click Icon
-- **Start at Login** - Käynnistyy automaattisesti kun kirjaudut sisään
-- **Refresh Offers** - Päivitä tarjoukset manuaalisesti
-- **Quit** - Sulje sovellus
-
----
-
-## 4. Korvaa ikonit omillasi (TÄRKEÄ!)
-
-Sovellus käyttää nyt placeholder-ikoneita (punainen/oranssi pallo).
-
-### Tarvitaan:
-1. `src/assets/icons/chili.png` - Normaali chili-ikoni (22x22px)
-2. `src/assets/icons/chili-alert.png` - Huomio-ikoni (22x22px)  
-3. `src/assets/icons/icon.icns` - macOS app icon (1024x1024 → .icns)
-4. `src/assets/icons/icon.ico` - Windows app icon (256x256 → .ico)
-
-📖 **Katso tarkat ohjeet:** `ICON_INSTRUCTIONS.md`
-
----
-
-## 5. Toiminnan testaus / Testing
-
-### Tarkista että tarjoukset latautuvat:
-1. Käynnistä sovellus: `npm start`
-2. Klikkaa tray-ikonia
-3. Pitäisi näkyä 3 päivän tarjousta fataliiseeds.net:stä
-
-### Jos ei toimi:
-- Avaa Developer Tools: View → Toggle Developer Tools
-- Katso Console-välilehti virheilmoituksia
-- Tarkista internet-yhteys
-- Testaa että fataliiseeds.net on saavutettavissa
-
-### Testaa animaatio:
-Animaatio alkaa kun:
-1. Sovellus käynnistyy ensimmäistä kertaa päivässä
-2. Kello on 06:00 ja uudet tarjoukset ladattu
-3. Klikkaamalla ikonia animaatio pysähtyy
-
----
-
-## 6. Kehitystyökalut / Dev Tools
-
-### Avaa Developer Console:
-```
-View → Toggle Developer Tools
-```
-tai näppäinyhdistelmä:
-- macOS: `Cmd + Option + I`
-- Windows: `Ctrl + Shift + I`
-
-### Tyhjennä tallennetut tiedot:
-```javascript
-// Developer Console:ssa
-require('electron-store').clear()
+# Using Homebrew
+brew install yt-dlp
 ```
 
 ---
 
-## 7. Buildaa installer (kun valmis)
+## Running VideoNinja
 
-### macOS:
-```bash
-npm run build:mac
-```
-Luo `dist/Fatalii's Daily Offers-1.0.0.dmg`
-
-### Windows:
-```bash
-npm run build:win
-```
-Luo `dist/Fatalii's Daily Offers Setup 1.0.0.exe`
-
-⚠️ **HUOM:** Buildaus ei toimi ilman oikeita .icns ja .ico tiedostoja!
-
----
-
-## 8. Yleisimmät ongelmat / Troubleshooting
-
-### "Cannot find module 'electron'"
-```bash
-rm -rf node_modules package-lock.json
-npm install
-```
-
-### Ikoni ei näy tray:ssä
-- Tarkista että sovellus käynnistyi (katso Task Manager / Activity Monitor)
-- Windows: Katso "piilotettuja ikoneita" system tray:n nuolesta
-- macOS: Katso menu bar:n oikeaa reunaa
-
-### Tarjoukset eivät lataudu
-- Tarkista Developer Console:sta virheilmoitukset
-- Testaa: `curl https://fataliiseeds.net` terminaalissa
-- Fataliiseeds.net sivuston rakenne saattanut muuttua (päivitä scraper.js)
-
-### Sovellus ei sammu
-```bash
-# macOS/Linux:
-pkill -f "Electron"
-
-# Windows PowerShell:
-Get-Process | Where-Object {$_.ProcessName -like "*Electron*"} | Stop-Process
-```
-
----
-
-## 9. Seuraavat askeleet
-
-1. ✅ Testaa että sovellus toimii
-2. 🎨 Luo/hanki oikeat chili-ikonit
-3. 🔨 Buildaa installer kun kaikki toimii
-4. 📦 Jaa muille!
-
----
-
-## Hyödyllisiä komentoja
+### 1. Install Dependencies
 
 ```bash
-# Käynnistä dev-tilassa
-npm start
+pnpm install
+```
 
-# Buildaa macOS installer
-npm run build:mac
+If you don't have pnpm installed:
 
-# Buildaa Windows installer  
-npm run build:win
+```bash
+npm install -g pnpm
+```
 
-# Buildaa molemmat
-npm run build:all
+### 2. Start the App
 
-# Tyhjennä dist-kansio
-rm -rf dist/
+```bash
+pnpm start
+```
+
+### 3. First Launch
+
+1. The app will check if yt-dlp is installed
+2. If found, you'll see the Settings panel
+3. Click **"📁 Choose"** to select where to save videos
+4. Once set, the download panel will appear
+
+### 4. Download Your First Video
+
+1. Paste a YouTube URL in the text box
+2. Select quality (optional - defaults to best)
+3. Click **"⬇️ Start Download"**
+4. Watch the progress in the Downloads list!
+
+---
+
+## Building for Distribution
+
+### Windows
+
+```bash
+pnpm run build:win
+```
+
+Output will be in the `dist/` folder:
+- `.exe` installer
+- Portable version
+
+### macOS (Planned)
+
+```bash
+pnpm run build:mac
 ```
 
 ---
 
-## Tarvitsetko apua?
+## Troubleshooting
 
-Katso:
-- `README.md` - Täysi dokumentaatio
-- `ICON_INSTRUCTIONS.md` - Ikonien luonti
-- `TEKNINEN_SUUNNITELMA.md` - Arkkitehtuuri
+### yt-dlp Not Found
 
-**Hyvää kehitystä! 🌶️🔥**
+**Problem:** App shows "yt-dlp Not Found" screen
+
+**Solutions:**
+1. Make sure yt-dlp.exe is installed
+2. Try placing it in the same folder as VideoNinja
+3. Restart the app after installing yt-dlp
+
+### Download Fails
+
+**Problem:** Video download shows red X
+
+**Solutions:**
+1. Check your internet connection
+2. Verify the YouTube URL is correct
+3. Try a different quality setting
+4. Click the 🔄 retry button
+
+### No Disk Space Warning
+
+**Problem:** Getting disk space warnings
+
+**Solutions:**
+1. Free up space on your download drive
+2. Change download folder to a drive with more space
+3. Delete old downloads
+
+---
+
+## Tips & Tricks
+
+### Multiple Downloads
+- You can queue multiple videos
+- They download one at a time automatically
+- Queue persists if you close the app
+
+### Quality Selection
+- **Best Quality** - Automatically selects the highest quality
+- **4K/1080p/720p** - Specific resolutions
+- **Audio Only** - Downloads just the audio track
+
+### Keyboard Shortcuts
+- Copy URL with `Ctrl+C` / `Cmd+C`
+- Paste with `Ctrl+V` / `Cmd+V`
+- Start download with `Enter` (when URL field is focused)
+
+### System Tray
+- App minimizes to system tray
+- Icon flashes when downloads complete
+- Right-click for quick menu
+
+---
+
+## What's Next?
+
+Check out [MEGATODOLIST.md](MEGATODOLIST.md) to see what features are coming!
+
+---
+
+**Happy Downloading! 🎬**

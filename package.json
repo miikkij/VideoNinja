@@ -1,7 +1,7 @@
 {
-  "name": "fatalii-daily-offers",
+  "name": "video-ninja",
   "version": "1.0.0",
-  "description": "Desktop app for Fatalii Seeds daily offers with 20% discount",
+  "description": "YouTube video downloader using yt-dlp",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
@@ -11,27 +11,24 @@
     "build:all": "electron-builder --mac --win"
   },
   "keywords": [
-    "fatalii",
-    "chili",
-    "seeds",
-    "daily-offers",
+    "youtube",
+    "downloader",
+    "yt-dlp",
+    "video",
     "electron"
   ],
-  "author": "Fatalii Seeds",
+  "author": "VideoNinja",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.13.2",
-    "cheerio": "^1.1.2",
     "electron-store": "^11.0.2"
   },
   "devDependencies": {
-    "canvas": "^3.2.0",
     "electron": "^39.1.2",
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "net.fataliiseeds.dailyoffers",
-    "productName": "Fatalii's Daily Offers",
+    "appId": "com.videoninja.app",
+    "productName": "VideoNinja",
     "forceCodeSigning": false,
     "directories": {
       "output": "dist"
@@ -54,7 +51,7 @@
       ]
     },
     "mac": {
-      "category": "public.app-category.lifestyle",
+      "category": "public.app-category.utilities",
       "icon": "src/assets/icons/icon.png",
       "target": [
         "dmg",

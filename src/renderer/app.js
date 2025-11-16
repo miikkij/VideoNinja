@@ -1,182 +1,335 @@
 const { ipcRenderer } = require('electron');
+const { shell } = require('electron');
 
-let currentOffers = [];
+let ytdlpAvailable = false;
+let settings = {};
+let queueState = {};
 
-// Close button handler
-document.addEventListener('DOMContentLoaded', () => {
-  const closeBtn = document.getElementById('close-btn');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', () => {
-      window.close();
-    });
+// DOM Elements
+const loadingEl = document.getElementById('loading');
+const ytdlpMissingEl = document.getElementById('ytdlp-missing');
+const settingsPanelEl = document.getElementById('settings-panel');
+const downloadPanelEl = document.getElementById('download-panel');
+const downloadsListEl = document.getElementById('downloads-list');
+const downloadsContainerEl = document.getElementById('downloads-container');
+
+const retryYtdlpBtn = document.getElementById('retry-ytdlp');
+const chooseFolderBtn = document.getElementById('choose-folder-btn');
+const startDownloadBtn = document.getElementById('start-download-btn');
+
+const ytdlpPathInput = document.getElementById('ytdlp-path');
+const downloadPathInput = document.getElementById('download-path');
+const videoUrlInput = document.getElementById('video-url');
+const qualitySelect = document.getElementById('quality-select');
+const diskSpaceEl = document.getElementById('disk-space');
+const diskSpaceValueEl = document.getElementById('disk-space-value');
+
+// ===== INITIALIZATION =====
+
+// Listen for yt-dlp status
+ipcRenderer.on('ytdlp-status', (event, ytdlpInfo) => {
+  console.log('yt-dlp status:', ytdlpInfo);
+  ytdlpAvailable = ytdlpInfo.available;
+  
+  loadingEl.style.display = 'none';
+  
+  if (ytdlpInfo.available) {
+    ytdlpPathInput.value = ytdlpInfo.path;
+    settingsPanelEl.style.display = 'block';
+  } else {
+    ytdlpMissingEl.style.display = 'block';
   }
 });
 
-// Listen for offers data from main process
-ipcRenderer.on('offers-data', (event, offers) => {
-  console.log('Received offers:', offers);
-  console.log('Offer image URLs:', offers.map(o => o.imageUrl));
-  currentOffers = offers;
-  displayOffers(offers);
+// Listen for settings loaded
+ipcRenderer.on('settings-loaded', (event, loadedSettings) => {
+  console.log('Settings loaded:', loadedSettings);
+  settings = loadedSettings;
+  
+  if (settings.downloadPath) {
+    downloadPathInput.value = settings.downloadPath;
+    
+    // Show download panel
+    downloadPanelEl.style.display = 'block';
+    downloadsListEl.style.display = 'block';
+  }
 });
 
-function displayOffers(offers) {
-  const loadingEl = document.getElementById('loading');
-  const errorEl = document.getElementById('error');
-  const containerEl = document.getElementById('offers-container');
-  const actionsEl = document.getElementById('actions');
+// Listen for queue updates
+ipcRenderer.on('queue-updated', (event, state) => {
+  console.log('Queue updated:', state);
+  queueState = state;
+  updateDownloadsList();
+});
+
+// Listen for download progress
+ipcRenderer.on('download-progress', (event, progress) => {
+  updateDownloadProgress(progress);
+});
+
+// Listen for disk space updates
+ipcRenderer.on('disk-space-updated', (event, diskSpace) => {
+  diskSpaceEl.style.display = 'block';
+  diskSpaceValueEl.textContent = `${diskSpace.freeFormatted} free of ${diskSpace.totalFormatted}`;
+});
+
+// Listen for disk space warnings
+ipcRenderer.on('disk-space-low', (event, data) => {
+  showNotification('⚠️ Disk Space Low', `Only ${data.freeFormatted} remaining`, 'warning');
+});
+
+ipcRenderer.on('disk-space-critical', (event, data) => {
+  showNotification('🚨 Disk Space Critical', `Only ${data.freeFormatted} remaining!`, 'error');
+});
+
+// ===== EVENT HANDLERS =====
+
+// Retry yt-dlp check
+retryYtdlpBtn.addEventListener('click', () => {
+  location.reload();
+});
+
+// Choose download folder
+chooseFolderBtn.addEventListener('click', async () => {
+  const folderPath = await ipcRenderer.invoke('choose-download-directory');
   
-  // Hide loading
-  loadingEl.style.display = 'none';
+  if (folderPath) {
+    downloadPathInput.value = folderPath;
+    settings.downloadPath = folderPath;
+    
+    // Save settings
+    ipcRenderer.send('save-settings', settings);
+    
+    // Show download panel
+    downloadPanelEl.style.display = 'block';
+    downloadsListEl.style.display = 'block';
+  }
+});
+
+// Start download
+startDownloadBtn.addEventListener('click', () => {
+  const url = videoUrlInput.value.trim();
   
-  // Check if we have offers
-  if (!offers || offers.length === 0) {
-    errorEl.style.display = 'block';
+  if (!url) {
+    showNotification('⚠️ No URL', 'Please enter a YouTube URL', 'warning');
     return;
   }
   
-  // Clear container
-  containerEl.innerHTML = '';
+  if (!settings.downloadPath) {
+    showNotification('⚠️ No Download Folder', 'Please choose a download folder first', 'warning');
+    return;
+  }
   
-  // Create product cards
-  offers.forEach((offer, index) => {
-    const card = createProductCard(offer, index);
-    containerEl.appendChild(card);
+  const format = qualitySelect.value;
+  const options = {};
+  
+  if (format) {
+    options.format = format;
+  }
+  
+  // Add to download queue
+  ipcRenderer.send('add-download', {
+    url: url,
+    outputPath: settings.downloadPath,
+    options: options
   });
   
-  // Show actions
-  actionsEl.style.display = 'block';
-}
+  // Clear input
+  videoUrlInput.value = '';
+  
+  showNotification('✅ Added to Queue', 'Download will start soon', 'success');
+});
 
-function createProductCard(offer, index) {
-  const card = document.createElement('div');
-  card.className = 'product-card';
+// Handle external links
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('link') && e.target.dataset.url) {
+    e.preventDefault();
+    shell.openExternal(e.target.dataset.url);
+  }
+});
+
+// ===== UI FUNCTIONS =====
+
+/**
+ * Update downloads list
+ */
+function updateDownloadsList() {
+  downloadsContainerEl.innerHTML = '';
   
-  // Product image
-  const imageContainer = document.createElement('div');
-  imageContainer.className = 'product-image-container';
+  const allDownloads = [
+    ...(queueState.currentDownload ? [queueState.currentDownload] : []),
+    ...(queueState.queue || []),
+    ...(queueState.history || [])
+  ];
   
-  const img = document.createElement('img');
-  img.className = 'product-image';
-  img.src = offer.imageUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23f0f0f0"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%23666" font-size="16">No Image</text></svg>';
-  img.alt = offer.name;
-  img.onerror = () => {
-    img.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23f0f0f0"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%23666" font-size="16">🌶️</text></svg>';
-  };
-  
-  imageContainer.appendChild(img);
-  
-  // Product info
-  const infoDiv = document.createElement('div');
-  infoDiv.className = 'product-info';
-  
-  const nameEl = document.createElement('div');
-  nameEl.className = 'product-name';
-  nameEl.textContent = offer.name || 'Unknown Product';
-  
-  infoDiv.appendChild(nameEl);
-  
-  // Product details row: Plant size | Fruit size | Fruit color | Heat level
-  const detailsRow = document.createElement('div');
-  detailsRow.className = 'product-details-row';
-  
-  // Plant size SVG
-  if (offer.plantSizeSvg) {
-    const plantSizeEl = document.createElement('div');
-    plantSizeEl.className = 'product-detail-item';
-    
-    const temp = document.createElement('div');
-    temp.innerHTML = offer.plantSizeSvg;
-    const svgElement = temp.querySelector('svg');
-    
-    if (svgElement) {
-      plantSizeEl.appendChild(svgElement);
-      detailsRow.appendChild(plantSizeEl);
-    }
+  if (allDownloads.length === 0) {
+    downloadsContainerEl.innerHTML = '<p class="no-downloads">No downloads yet</p>';
+    return;
   }
   
-  // Fruit Size SVG
-  if (offer.fruitSizeSvg) {
-    const fruitSizeEl = document.createElement('div');
-    fruitSizeEl.className = 'product-detail-item';
-    
-    const temp = document.createElement('div');
-    temp.innerHTML = offer.fruitSizeSvg;
-    const svgElement = temp.querySelector('svg');
-    
-    if (svgElement) {
-      fruitSizeEl.appendChild(svgElement);
-      detailsRow.appendChild(fruitSizeEl);
-    }
-  }
-  
-  // Fruit color text
-  if (offer.fruitColor) {
-    const fruitColorEl = document.createElement('div');
-    fruitColorEl.className = 'product-detail-item product-detail-color';
-    fruitColorEl.textContent = offer.fruitColor;
-    detailsRow.appendChild(fruitColorEl);
-  }
-  
-  // Heat level SVG (move to end)
-  if (offer.heatSvg) {
-    const heatDetailEl = document.createElement('div');
-    heatDetailEl.className = 'product-detail-item';
-    
-    const temp = document.createElement('div');
-    temp.innerHTML = offer.heatSvg;
-    const svgElement = temp.querySelector('svg');
-    
-    if (svgElement) {
-      heatDetailEl.appendChild(svgElement);
-      detailsRow.appendChild(heatDetailEl);
-    }
-  }
-  
-  infoDiv.appendChild(detailsRow);
-  
-  // Add to cart button
-  const addBtn = document.createElement('button');
-  addBtn.className = 'btn btn-secondary';
-  addBtn.textContent = '🛒 Add to Cart';
-  addBtn.onclick = () => addToCart(offer);
-  
-  // Assemble card
-  card.appendChild(imageContainer);
-  card.appendChild(infoDiv);
-  card.appendChild(addBtn);
-  
-  return card;
+  allDownloads.forEach(download => {
+    const downloadEl = createDownloadElement(download);
+    downloadsContainerEl.appendChild(downloadEl);
+  });
 }
 
-function getHeatIcons(count) {
-  if (!count || count === 0) return '';
-  return '🌶️'.repeat(Math.min(count, 5));
-}
-
-function addToCart(offer) {
-  console.log('Adding to cart:', offer);
-  ipcRenderer.send('add-to-cart', offer.addToCartUrl);
-}
-
-function addAllToCart() {
-  console.log('Adding all to cart:', currentOffers);
-  ipcRenderer.send('add-all-to-cart', currentOffers);
+/**
+ * Create download element
+ */
+function createDownloadElement(download) {
+  const el = document.createElement('div');
+  el.className = `download-item status-${download.status}`;
+  el.dataset.id = download.id;
   
-  // Close window after a short delay to allow browser tabs to open
+  // Status icon
+  let statusIcon = '⏳';
+  if (download.status === 'downloading') statusIcon = '⬇️';
+  if (download.status === 'completed') statusIcon = '✅';
+  if (download.status === 'failed') statusIcon = '❌';
+  if (download.status === 'cancelled') statusIcon = '🚫';
+  
+  // Get video title from URL (simplified)
+  const urlParts = download.url.split('/');
+  const videoId = urlParts[urlParts.length - 1] || 'Video';
+  
+  // Create HTML
+  el.innerHTML = `
+    <div class="download-icon">${statusIcon}</div>
+    <div class="download-info">
+      <div class="download-url">${truncateUrl(download.url)}</div>
+      <div class="download-status-text">${getStatusText(download)}</div>
+      ${download.status === 'downloading' ? `
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: ${download.progress}%"></div>
+          <div class="progress-text">${Math.round(download.progress)}%</div>
+        </div>
+      ` : ''}
+      ${download.error ? `<div class="download-error">${download.error}</div>` : ''}
+    </div>
+    <div class="download-actions">
+      ${createDownloadActions(download)}
+    </div>
+  `;
+  
+  // Add event listeners
+  setupDownloadActions(el, download);
+  
+  return el;
+}
+
+/**
+ * Get status text
+ */
+function getStatusText(download) {
+  if (download.status === 'pending') return 'Waiting in queue...';
+  if (download.status === 'downloading') return 'Downloading...';
+  if (download.status === 'completed' && download.completedAt) {
+    const date = new Date(download.completedAt);
+    return `Completed ${date.toLocaleString()}`;
+  }
+  if (download.status === 'failed') return 'Download failed';
+  if (download.status === 'cancelled') return 'Cancelled';
+  return download.status;
+}
+
+/**
+ * Create download action buttons
+ */
+function createDownloadActions(download) {
+  if (download.status === 'completed') {
+    return `
+      <button class="btn-icon" data-action="open" title="Open Video">▶️</button>
+      <button class="btn-icon" data-action="show-folder" title="Show in Folder">📁</button>
+    `;
+  }
+  
+  if (download.status === 'failed') {
+    return `
+      <button class="btn-icon" data-action="retry" title="Retry">🔄</button>
+    `;
+  }
+  
+  if (download.status === 'pending') {
+    return `
+      <button class="btn-icon" data-action="cancel" title="Cancel">🚫</button>
+    `;
+  }
+  
+  return '';
+}
+
+/**
+ * Setup download action buttons
+ */
+function setupDownloadActions(el, download) {
+  const buttons = el.querySelectorAll('.btn-icon');
+  
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.action;
+      
+      if (action === 'open') {
+        ipcRenderer.send('open-video', download.filepath);
+      } else if (action === 'show-folder') {
+        ipcRenderer.send('show-in-folder', download.filepath);
+      } else if (action === 'retry') {
+        ipcRenderer.send('retry-download', download.id);
+      } else if (action === 'cancel') {
+        ipcRenderer.send('cancel-download', download.id);
+      }
+    });
+  });
+}
+
+/**
+ * Update download progress
+ */
+function updateDownloadProgress(progress) {
+  const downloadEl = document.querySelector(`[data-id="${progress.id}"]`);
+  if (!downloadEl) return;
+  
+  const progressFill = downloadEl.querySelector('.progress-fill');
+  const progressText = downloadEl.querySelector('.progress-text');
+  
+  if (progressFill) {
+    progressFill.style.width = `${progress.progress}%`;
+  }
+  
+  if (progressText) {
+    progressText.textContent = `${Math.round(progress.progress)}%`;
+  }
+}
+
+/**
+ * Show notification
+ */
+function showNotification(title, message, type = 'info') {
+  // Simple notification (could be improved with a notification library)
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.innerHTML = `
+    <div class="notification-title">${title}</div>
+    <div class="notification-message">${message}</div>
+  `;
+  
+  document.body.appendChild(notification);
+  
   setTimeout(() => {
-    window.close();
-  }, 1500); // 1.5 second delay
+    notification.classList.add('notification-show');
+  }, 10);
+  
+  setTimeout(() => {
+    notification.classList.remove('notification-show');
+    setTimeout(() => {
+      notification.remove();
+    }, 300);
+  }, 3000);
 }
 
-// Event listeners
-document.getElementById('add-all-btn').addEventListener('click', addAllToCart);
-
-// Request initial data if not received yet
-setTimeout(() => {
-  if (currentOffers.length === 0) {
-    console.log('No offers received, showing error');
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('error').style.display = 'block';
-  }
-}, 5000); // 5 second timeout
+/**
+ * Truncate URL for display
+ */
+function truncateUrl(url) {
+  if (url.length <= 50) return url;
+  return url.substring(0, 47) + '...';
+}

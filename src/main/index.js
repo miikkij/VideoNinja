@@ -1,41 +1,41 @@
-const { app, BrowserWindow, Tray, Menu, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, nativeImage, ipcMain, dialog } = require('electron');
 const path = require('path');
 const Store = require('electron-store').default || require('electron-store');
-const { fetchDailyOffers } = require('./scraper');
+const { checkYtDlpAvailability, getDiskSpace, formatBytes } = require('./ytdlp');
+const DownloadQueue = require('./downloadQueue');
 
 const store = new Store();
+const downloadQueue = new DownloadQueue();
+
 let tray = null;
 let mainWindow = null;
 let animationInterval = null;
 let isAnimating = false;
+let ytdlpAvailable = false;
+let diskSpaceInterval = null;
 
 // Platform-specific icon paths
 const ICONS = {
-  normal: path.join(__dirname, '../assets/icons/chili.png'),
-  alert: path.join(__dirname, '../assets/icons/chili-alert.png'),
-  normalSvg: path.join(__dirname, '../assets/icons/chili.svg'),
-  alertSvg: path.join(__dirname, '../assets/icons/chili-alert.svg')
+  normal: path.join(__dirname, '../assets/icons/icon.png'),
+  alert: path.join(__dirname, '../assets/icons/icon-alert.png'),
 };
 
-// Simple base64 encoded 16x16 red circle icon as fallback
+// Simple base64 encoded 16x16 video camera icon as fallback
 const FALLBACK_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAD8SURBVDiNpZKxSsNQFIa/e2/SQhFE6OLg4uDm5OQDuPgAPoCTi6Ogo4uDr+Hm5ODg5uYDuDi4uLg4KIhQpE1yj0OSNk3T2h8u3HP+7z/nP+cKM8YYphGRFWAf2AQ84BF4BU6NMZdN+qrM+Al4BvaAtKa1BqwDW8Ar8DhN2wHegXWgVZPWBs6BDWPMoEndAd6ALWNMWJO2A7wBu8aYcpK2C3wAe8aYapL2E/gE9o0x1STtJ/AJ7BtjxpO0n8AncGCMuZ+k/QJ+AYfGmP4sbRf4Bo6MMf1Z2h5wBxwbY0azTm8f+AaOjTGjhv8icAMcGWPGc7Wd/wN/AO4vTZ5EtF+jAAAAAElFTkSuQmCC';
-const FALLBACK_ICON_ALERT = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAEOSURBVDiNpZKxSsNQGIW/f25SKIIoOLg4uDk5+QAuPoCTo6ODiIOLg6/h5uTg4ObmA7g4uLi4OCiIUKRNcq9DkjZNa9sfLtxz/vN/5/znCjPGGOYRkXVgD9gCPOANeAFOjTFXbfq6zPgJeAZ2ga2WthqwBmwDL8DTNK0DfAAbwFpLWws4BzaMMfdtek7wAWwaY9KWthP4BLaNMUlL2wl8ATvGmGKS5gLfwK4xZjhJ8z6B38CeMWY0SfMOgN/AvjFmPEnzDoBfwIEx5mGS5h0Cv4B9Y8xwluYB18ChMWYwS9sDroFDY8xg1unjA9fAoTGmP+f09oAb4NAY05/zXwRugENjTH+utvd/4A/vMlJRb7FqfwAAAABJRU5ErkJggg==';
+const FALLBACK_ICON_ALERT = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAEOSURBVDiNpZKxSsNQGIW/f25SKIIoOLg4uDm5+QAuPoCTo6ODiIOLg6/h5uTg4ObmA7g4uLi4OCiIUKRNcq9DkjZNa9sfLtxz/vN/5/znCjPGGOYRkXVgD9gCPOANeAFOjTFXbfq6zPgJeAZ2ga2WthqwBmwDL8DTNK0DfAAbwFpLWws4BzaMMfdtek7wAWwaY9KWthP4BLaNMUlL2wl8ATvGmGKS5gLfwK4xZjhJ8z6B38CeMWY0SfMOgN/AvjFmPEnzDoBfwIEx5mGS5h0Cv4B9Y8xwluYB18ChMWYwS9sDroFDY8xg1unjA9fAoTGmP+f09oAb4NAY05/zXwRugENjTH+utvd/4A/vMlJRb7FqfwAAAABJRU5ErkJggg==';
 
 // Check if custom icons exist
 const fs = require('fs');
 const usePngIcons = fs.existsSync(ICONS.normal) && fs.existsSync(ICONS.alert);
-const useSvgIcons = !usePngIcons && fs.existsSync(ICONS.normalSvg) && fs.existsSync(ICONS.alertSvg);
 
+/**
+ * Create system tray icon
+ */
 function createTray() {
-  // Create tray icon
   let icon;
   
   if (usePngIcons) {
     icon = nativeImage.createFromPath(ICONS.normal);
-  } else if (useSvgIcons) {
-    // Load SVG and convert to image
-    const svgBuffer = fs.readFileSync(ICONS.normalSvg);
-    icon = nativeImage.createFromBuffer(svgBuffer);
   } else {
     // Using fallback icons (add your custom icons to src/assets/icons/)
     icon = nativeImage.createFromDataURL(FALLBACK_ICON);
@@ -48,12 +48,12 @@ function createTray() {
   }
   
   tray = new Tray(icon);
-  tray.setToolTip('Fatalii\'s Daily Offers');
+  tray.setToolTip('VideoNinja - YouTube Downloader');
   
-  // Click to show offers window
+  // Click to show main window
   tray.on('click', () => {
     stopAnimation();
-    showOffersWindow();
+    showMainWindow();
   });
   
   // Right-click for context menu
@@ -62,26 +62,16 @@ function createTray() {
   });
 }
 
+/**
+ * Show context menu on tray icon
+ */
 function showContextMenu() {
-  const isStartAtLogin = app.getLoginItemSettings().openAtLogin;
-  
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Start at Login',
-      type: 'checkbox',
-      checked: isStartAtLogin,
-      click: (menuItem) => {
-        app.setLoginItemSettings({
-          openAtLogin: menuItem.checked,
-          openAsHidden: true
-        });
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Refresh Offers',
-      click: async () => {
-        await checkForNewOffers(true);
+      label: 'Open VideoNinja',
+      click: () => {
+        stopAnimation();
+        showMainWindow();
       }
     },
     { type: 'separator' },
@@ -96,62 +86,75 @@ function showContextMenu() {
   tray.popUpContextMenu(contextMenu);
 }
 
-async function showOffersWindow() {
+/**
+ * Show main application window
+ */
+async function showMainWindow() {
   if (mainWindow) {
     mainWindow.focus();
     return;
   }
   
   mainWindow = new BrowserWindow({
-    width: 500,
+    width: 800,
     height: 700,
     show: false,
-    frame: false,
-    resizable: false,
+    frame: true,
+    resizable: true,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
-    }
+    },
+    icon: usePngIcons ? ICONS.normal : undefined
   });
   
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   
   mainWindow.on('closed', () => {
     mainWindow = null;
+    stopDiskSpaceMonitoring();
   });
   
-  // Wait for page to load, then fetch and send offers
+  // Wait for page to load, then send initial data
   mainWindow.webContents.once('did-finish-load', async () => {
     try {
-      console.log('Window loaded, fetching offers...');
-      const offers = await fetchDailyOffers();
-      console.log('Sending offers to renderer:', offers.length);
-      mainWindow.webContents.send('offers-data', offers);
+      console.log('Window loaded, checking yt-dlp availability...');
+      const ytdlpInfo = await checkYtDlpAvailability();
+      ytdlpAvailable = ytdlpInfo.available;
+      
+      mainWindow.webContents.send('ytdlp-status', ytdlpInfo);
+      
+      // Load saved settings
+      const settings = store.get('settings', {});
+      mainWindow.webContents.send('settings-loaded', settings);
+      
+      // Load saved queue state
+      const queueState = store.get('queueState');
+      if (queueState) {
+        downloadQueue.loadState(queueState);
+      }
+      
+      // Send initial queue state
+      mainWindow.webContents.send('queue-updated', downloadQueue.getQueueState());
+      
+      // Start disk space monitoring if download path is set
+      if (settings.downloadPath) {
+        startDiskSpaceMonitoring(settings.downloadPath);
+      }
+      
     } catch (error) {
-      console.error('Failed to fetch offers:', error);
-      mainWindow.webContents.send('offers-data', []);
+      console.error('Failed to initialize:', error);
     }
   });
   
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    positionWindowNearTray();
   });
 }
 
-function positionWindowNearTray() {
-  if (!mainWindow || !tray) return;
-  
-  const trayBounds = tray.getBounds();
-  const windowBounds = mainWindow.getBounds();
-  
-  // Position window near tray icon
-  const x = Math.round(trayBounds.x - windowBounds.width / 2 + trayBounds.width / 2);
-  const y = process.platform === 'darwin' ? trayBounds.y + trayBounds.height : trayBounds.y - windowBounds.height;
-  
-  mainWindow.setPosition(x, y);
-}
-
+/**
+ * Start tray icon flashing animation
+ */
 function startAnimation() {
   if (isAnimating) return;
   
@@ -164,10 +167,6 @@ function startAnimation() {
     if (usePngIcons) {
       const iconPath = showAlert ? ICONS.alert : ICONS.normal;
       icon = nativeImage.createFromPath(iconPath);
-    } else if (useSvgIcons) {
-      const svgPath = showAlert ? ICONS.alertSvg : ICONS.normalSvg;
-      const svgBuffer = fs.readFileSync(svgPath);
-      icon = nativeImage.createFromBuffer(svgBuffer);
     } else {
       const iconData = showAlert ? FALLBACK_ICON_ALERT : FALLBACK_ICON;
       icon = nativeImage.createFromDataURL(iconData);
@@ -184,6 +183,9 @@ function startAnimation() {
   }, 750); // 0.75 seconds
 }
 
+/**
+ * Stop tray icon animation
+ */
 function stopAnimation() {
   if (animationInterval) {
     clearInterval(animationInterval);
@@ -195,9 +197,6 @@ function stopAnimation() {
   let icon;
   if (usePngIcons) {
     icon = nativeImage.createFromPath(ICONS.normal);
-  } else if (useSvgIcons) {
-    const svgBuffer = fs.readFileSync(ICONS.normalSvg);
-    icon = nativeImage.createFromBuffer(svgBuffer);
   } else {
     icon = nativeImage.createFromDataURL(FALLBACK_ICON);
   }
@@ -209,95 +208,194 @@ function stopAnimation() {
   }
   
   tray.setImage(icon);
-  
-  // Mark as seen
-  const today = new Date().toDateString();
-  store.set('lastSeenDate', today);
 }
 
-async function checkForNewOffers(force = false) {
-  const today = new Date().toDateString();
-  const lastSeenDate = store.get('lastSeenDate');
-  const lastCheckDate = store.get('lastCheckDate');
+/**
+ * Start monitoring disk space
+ */
+function startDiskSpaceMonitoring(downloadPath) {
+  stopDiskSpaceMonitoring();
   
-  // Only fetch if not checked today or forced
-  if (!force && lastCheckDate === today) {
-    // Check if user has seen today's offers
-    if (lastSeenDate !== today) {
-      startAnimation();
-    }
-    return;
-  }
-  
-  try {
-    const offers = await fetchDailyOffers();
-    
-    if (offers && offers.length > 0) {
-      store.set('lastCheckDate', today);
-      store.set('currentOffers', offers);
+  const checkDiskSpace = async () => {
+    try {
+      const diskSpace = await getDiskSpace(downloadPath);
       
-      // Start animation if user hasn't seen today's offers
-      if (lastSeenDate !== today) {
-        startAnimation();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('disk-space-updated', {
+          total: diskSpace.total,
+          free: diskSpace.free,
+          used: diskSpace.used,
+          freeFormatted: formatBytes(diskSpace.free),
+          totalFormatted: formatBytes(diskSpace.total)
+        });
+        
+        // Warn if less than 5GB
+        const fiveGB = 5 * 1024 * 1024 * 1024;
+        const oneGB = 1 * 1024 * 1024 * 1024;
+        
+        if (diskSpace.free < oneGB) {
+          mainWindow.webContents.send('disk-space-critical', {
+            free: diskSpace.free,
+            freeFormatted: formatBytes(diskSpace.free)
+          });
+        } else if (diskSpace.free < fiveGB) {
+          mainWindow.webContents.send('disk-space-low', {
+            free: diskSpace.free,
+            freeFormatted: formatBytes(diskSpace.free)
+          });
+        }
       }
+    } catch (error) {
+      console.error('Error checking disk space:', error);
     }
-  } catch (error) {
-    console.error('Failed to check for new offers:', error);
+  };
+  
+  // Check immediately
+  checkDiskSpace();
+  
+  // Check every 30 seconds
+  diskSpaceInterval = setInterval(checkDiskSpace, 30000);
+}
+
+/**
+ * Stop disk space monitoring
+ */
+function stopDiskSpaceMonitoring() {
+  if (diskSpaceInterval) {
+    clearInterval(diskSpaceInterval);
+    diskSpaceInterval = null;
   }
 }
 
-function scheduleNextCheck() {
-  const now = new Date();
-  const next6AM = new Date();
-  next6AM.setHours(6, 0, 0, 0);
+// ===== IPC HANDLERS =====
+
+/**
+ * Save settings
+ */
+ipcMain.on('save-settings', (event, settings) => {
+  store.set('settings', settings);
   
-  // If it's past 6 AM today, schedule for 6 AM tomorrow
-  if (now >= next6AM) {
-    next6AM.setDate(next6AM.getDate() + 1);
+  // Start/update disk space monitoring if download path changed
+  if (settings.downloadPath) {
+    startDiskSpaceMonitoring(settings.downloadPath);
   }
   
-  const msUntil6AM = next6AM - now;
-  
-  setTimeout(() => {
-    checkForNewOffers();
-    // Schedule next day
-    setInterval(() => {
-      checkForNewOffers();
-    }, 24 * 60 * 60 * 1000); // Every 24 hours
-  }, msUntil6AM);
-  
-  console.log(`Next check scheduled for: ${next6AM.toLocaleString()}`);
-}
-
-// Handle add to cart from renderer
-const { ipcMain } = require('electron');
-
-ipcMain.on('add-to-cart', (event, productUrl) => {
-  shell.openExternal(productUrl);
+  event.reply('settings-saved', true);
 });
 
-ipcMain.on('add-all-to-cart', (event, products) => {
-  // Open all product pages with add-to-cart parameter
-  products.forEach((product, index) => {
-    setTimeout(() => {
-      shell.openExternal(product.addToCartUrl);
-    }, index * 500); // Stagger by 500ms to avoid browser issues
+/**
+ * Choose download directory
+ */
+ipcMain.handle('choose-download-directory', async (event) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory']
   });
+  
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths[0];
+  }
+  
+  return null;
 });
 
-// App lifecycle
+/**
+ * Add download to queue
+ */
+ipcMain.on('add-download', (event, { url, outputPath, options }) => {
+  const downloadId = downloadQueue.addDownload(url, outputPath, options);
+  event.reply('download-added', downloadId);
+});
+
+/**
+ * Cancel download
+ */
+ipcMain.on('cancel-download', (event, downloadId) => {
+  const success = downloadQueue.cancelDownload(downloadId);
+  event.reply('download-cancelled', { id: downloadId, success });
+});
+
+/**
+ * Retry download
+ */
+ipcMain.on('retry-download', (event, downloadId) => {
+  const newId = downloadQueue.retryDownload(downloadId);
+  event.reply('download-retried', { oldId: downloadId, newId });
+});
+
+/**
+ * Open downloaded video
+ */
+ipcMain.on('open-video', (event, filepath) => {
+  shell.openPath(filepath);
+});
+
+/**
+ * Show video in folder
+ */
+ipcMain.on('show-in-folder', (event, filepath) => {
+  shell.showItemInFolder(filepath);
+});
+
+// ===== DOWNLOAD QUEUE EVENTS =====
+
+downloadQueue.on('queue-updated', (state) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('queue-updated', state);
+  }
+  
+  // Save queue state
+  store.set('queueState', downloadQueue.getStateForSave());
+});
+
+downloadQueue.on('download-started', (download) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('download-started', download);
+  }
+});
+
+downloadQueue.on('download-progress', (progress) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('download-progress', progress);
+  }
+});
+
+downloadQueue.on('download-completed', (download) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('download-completed', download);
+  }
+  
+  // Flash tray icon
+  startAnimation();
+  
+  // Stop after 10 seconds
+  setTimeout(() => {
+    stopAnimation();
+  }, 10000);
+});
+
+downloadQueue.on('download-failed', (download) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('download-failed', download);
+  }
+});
+
+// ===== APP LIFECYCLE =====
+
 app.whenReady().then(async () => {
   createTray();
   
-  // Check for offers on startup
-  await checkForNewOffers();
+  // Check for yt-dlp availability
+  const ytdlpInfo = await checkYtDlpAvailability();
+  ytdlpAvailable = ytdlpInfo.available;
+  console.log('yt-dlp available:', ytdlpAvailable);
   
-  // Schedule daily checks at 6 AM
-  scheduleNextCheck();
+  // Show main window on first launch
+  showMainWindow();
 });
 
 app.on('window-all-closed', (e) => {
-  // Prevent app from quitting when window is closed
+  // Prevent app from quitting when window is closed (keep in tray)
+  // Comment out the next line if you want app to quit when window closes
   e.preventDefault();
 });
 
@@ -305,6 +403,7 @@ app.on('before-quit', () => {
   if (animationInterval) {
     clearInterval(animationInterval);
   }
+  stopDiskSpaceMonitoring();
 });
 
 // Prevent multiple instances
@@ -317,7 +416,7 @@ if (!gotTheLock) {
     if (mainWindow) {
       mainWindow.focus();
     } else {
-      showOffersWindow();
+      showMainWindow();
     }
   });
 }
