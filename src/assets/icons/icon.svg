@@ -1,0 +1,46 @@
+<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6B9D;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#C239B3;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+      <feOffset dx="0" dy="4" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.3"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="220" fill="url(#grad3)" filter="url(#shadow)"/>
+  
+  <!-- Camera body -->
+  <rect x="120" y="180" width="272" height="216" rx="30" fill="#FFFFFF" opacity="0.95"/>
+  
+  <!-- Camera lens outer -->
+  <circle cx="256" cy="288" r="90" fill="url(#grad3)"/>
+  
+  <!-- Camera lens middle -->
+  <circle cx="256" cy="288" r="70" fill="#FFFFFF" opacity="0.3"/>
+  <circle cx="256" cy="288" r="50" fill="#FFFFFF" opacity="0.5"/>
+  <circle cx="256" cy="288" r="30" fill="#FFFFFF" opacity="0.8"/>
+  
+  <!-- Viewfinder -->
+  <rect x="150" y="130" width="90" height="60" rx="12" fill="#FFFFFF" opacity="0.95"/>
+  <rect x="155" y="135" width="80" height="50" rx="8" fill="url(#grad3)"/>
+  
+  <!-- Record button -->
+  <circle cx="340" cy="210" r="20" fill="#FF5252"/>
+  <circle cx="340" cy="210" r="15" fill="#FFFFFF" opacity="0.3"/>
+  
+  <!-- Ninja element (small shuriken) -->
+  <g transform="translate(180, 210)">
+    <path d="M 0,-15 L 3,-3 L 15,0 L 3,3 L 0,15 L -3,3 L -15,0 L -3,-3 Z" fill="#333333" opacity="0.2"/>
+  </g>
+</svg>

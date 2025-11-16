@@ -8,9 +8,11 @@
 </head>
 <body>
   <div class="container">
-    <header>
-      <h1>🎬 VideoNinja</h1>
+    <!-- Header - click to toggle settings, X to hide -->
+    <header id="header-toggle">
+      <h1>🎬 VideoNinja 🥷</h1>
       <p class="subtitle">YouTube Video Downloader</p>
+      <button class="close-btn" id="close-btn">✕</button>
     </header>
 
     <!-- yt-dlp Not Found Screen -->
@@ -48,8 +50,11 @@
       <h2>⚙️ Settings</h2>
       
       <div class="setting-item">
-        <label>yt-dlp Location:</label>
-        <input type="text" id="ytdlp-path" readonly class="input-readonly">
+        <label>yt-dlp Status:</label>
+        <div class="status-badge status-found">
+          <span class="status-icon">✓</span>
+          <span class="status-text" id="ytdlp-status-text">Found</span>
+        </div>
       </div>
       
       <div class="setting-item">

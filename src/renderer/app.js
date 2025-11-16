@@ -17,12 +17,13 @@ const retryYtdlpBtn = document.getElementById('retry-ytdlp');
 const chooseFolderBtn = document.getElementById('choose-folder-btn');
 const startDownloadBtn = document.getElementById('start-download-btn');
 
-const ytdlpPathInput = document.getElementById('ytdlp-path');
 const downloadPathInput = document.getElementById('download-path');
 const videoUrlInput = document.getElementById('video-url');
 const qualitySelect = document.getElementById('quality-select');
 const diskSpaceEl = document.getElementById('disk-space');
 const diskSpaceValueEl = document.getElementById('disk-space-value');
+const headerToggle = document.getElementById('header-toggle');
+const closeBtn = document.getElementById('close-btn');
 
 // ===== INITIALIZATION =====
 
@@ -34,8 +35,9 @@ ipcRenderer.on('ytdlp-status', (event, ytdlpInfo) => {
   loadingEl.style.display = 'none';
   
   if (ytdlpInfo.available) {
-    ytdlpPathInput.value = ytdlpInfo.path;
-    settingsPanelEl.style.display = 'block';
+    // Show just a simple "Found" badge instead of the full path
+    // Settings panel is hidden by default, toggle with § key
+    settingsPanelEl.style.display = 'none';
   } else {
     ytdlpMissingEl.style.display = 'block';
   }
@@ -53,6 +55,9 @@ ipcRenderer.on('settings-loaded', (event, loadedSettings) => {
     downloadPanelEl.style.display = 'block';
     downloadsListEl.style.display = 'block';
   }
+  
+  // Show settings hint notification
+  showNotification('💡 Tip', 'Click header or press F3 to toggle settings', 'info');
 });
 
 // Listen for queue updates
@@ -148,6 +153,34 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Toggle settings panel by clicking header
+headerToggle.addEventListener('click', () => {
+  if (settingsPanelEl.style.display === 'none') {
+    settingsPanelEl.style.display = 'block';
+  } else {
+    settingsPanelEl.style.display = 'none';
+  }
+});
+
+// Close button - hide window to tray
+closeBtn.addEventListener('click', (e) => {
+  e.stopPropagation(); // Don't trigger header toggle
+  const { ipcRenderer } = require('electron');
+  ipcRenderer.send('hide-window');
+});
+
+// Toggle settings panel with F3 key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'F3') {
+    e.preventDefault();
+    if (settingsPanelEl.style.display === 'none') {
+      settingsPanelEl.style.display = 'block';
+    } else {
+      settingsPanelEl.style.display = 'none';
+    }
+  }
+});
+
 // ===== UI FUNCTIONS =====
 
 /**
@@ -156,11 +189,22 @@ document.addEventListener('click', (e) => {
 function updateDownloadsList() {
   downloadsContainerEl.innerHTML = '';
   
+  // Don't show currentDownload separately if it's also in the queue
+  // Only show it from queue (it gets removed from queue when processing starts)
   const allDownloads = [
-    ...(queueState.currentDownload ? [queueState.currentDownload] : []),
     ...(queueState.queue || []),
     ...(queueState.history || [])
   ];
+  
+  // If there's a current download, make sure it's shown (it might not be in queue anymore)
+  if (queueState.currentDownload) {
+    // Check if it's already in history (completed/failed)
+    const inHistory = queueState.history?.some(d => d.id === queueState.currentDownload.id);
+    if (!inHistory) {
+      // Add to beginning if not in history yet
+      allDownloads.unshift(queueState.currentDownload);
+    }
+  }
   
   if (allDownloads.length === 0) {
     downloadsContainerEl.innerHTML = '<p class="no-downloads">No downloads yet</p>';

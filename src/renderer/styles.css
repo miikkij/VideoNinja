@@ -29,18 +29,59 @@ header {
   padding: 30px 20px;
   text-align: center;
   box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  user-select: none;
+  position: relative;
+  -webkit-app-region: drag;
+}
+
+header:hover {
+  background: linear-gradient(135deg, #FF5288 0%, #B02A9F 100%);
 }
 
 header h1 {
   font-size: 32px;
   margin-bottom: 5px;
   font-weight: 700;
+  -webkit-app-region: no-drag;
 }
 
 .subtitle {
   font-size: 16px;
   opacity: 0.95;
   font-weight: 400;
+  -webkit-app-region: no-drag;
+}
+
+.close-btn {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  padding: 0;
+  line-height: 1;
+  -webkit-app-region: no-drag;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+.close-btn:active {
+  transform: scale(0.95);
 }
 
 /* ===== LOADING STATE ===== */
@@ -225,6 +266,27 @@ header h1 {
 .disk-space-value {
   color: #155724;
   font-family: 'Courier New', monospace;
+}
+
+/* Status Badge */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.status-badge.status-found {
+  background: #d4edda;
+  color: #155724;
+  border: 2px solid #c3e6cb;
+}
+
+.status-icon {
+  font-size: 18px;
 }
 
 /* ===== DOWNLOAD PANEL ===== */

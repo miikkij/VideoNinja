@@ -91,15 +91,26 @@ function showContextMenu() {
  */
 async function showMainWindow() {
   if (mainWindow) {
+    mainWindow.show();
     mainWindow.focus();
     return;
   }
   
-  mainWindow = new BrowserWindow({
+  // Get saved window position or use defaults
+  const windowBounds = store.get('windowBounds', {
     width: 800,
     height: 700,
+    x: undefined,
+    y: undefined
+  });
+  
+  mainWindow = new BrowserWindow({
+    width: windowBounds.width,
+    height: windowBounds.height,
+    x: windowBounds.x,
+    y: windowBounds.y,
     show: false,
-    frame: true,
+    frame: false,
     resizable: true,
     webPreferences: {
       nodeIntegration: true,
@@ -110,9 +121,12 @@ async function showMainWindow() {
   
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-    stopDiskSpaceMonitoring();
+  mainWindow.on('close', (e) => {
+    // Save window position
+    store.set('windowBounds', mainWindow.getBounds());
+    // Don't actually close, just hide
+    e.preventDefault();
+    mainWindow.hide();
   });
   
   // Wait for page to load, then send initial data
@@ -336,6 +350,15 @@ ipcMain.on('show-in-folder', (event, filepath) => {
   shell.showItemInFolder(filepath);
 });
 
+/**
+ * Hide window to tray
+ */
+ipcMain.on('hide-window', (event) => {
+  if (mainWindow) {
+    mainWindow.hide();
+  }
+});
+
 // ===== DOWNLOAD QUEUE EVENTS =====
 
 downloadQueue.on('queue-updated', (state) => {
@@ -404,6 +427,12 @@ app.on('before-quit', () => {
     clearInterval(animationInterval);
   }
   stopDiskSpaceMonitoring();
+  
+  // Actually close the window when quitting
+  if (mainWindow) {
+    mainWindow.destroy();
+    mainWindow = null;
+  }
 });
 
 // Prevent multiple instances
