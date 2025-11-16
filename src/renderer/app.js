@@ -24,6 +24,7 @@ const diskSpaceEl = document.getElementById('disk-space');
 const diskSpaceValueEl = document.getElementById('disk-space-value');
 const headerToggle = document.getElementById('header-toggle');
 const closeBtn = document.getElementById('close-btn');
+const startupToggleBtn = document.getElementById('startup-toggle-btn');
 
 // ===== INITIALIZATION =====
 
@@ -87,11 +88,28 @@ ipcRenderer.on('disk-space-critical', (event, data) => {
   showNotification('🚨 Disk Space Critical', `Only ${data.freeFormatted} remaining!`, 'error');
 });
 
+// Listen for startup status
+ipcRenderer.on('startup-status', (event, isEnabled) => {
+  updateStartupButton(isEnabled);
+});
+
 // ===== EVENT HANDLERS =====
 
 // Retry yt-dlp check
 retryYtdlpBtn.addEventListener('click', () => {
   location.reload();
+});
+
+// Toggle startup on/off
+startupToggleBtn.addEventListener('click', async () => {
+  const result = await ipcRenderer.invoke('toggle-startup');
+  updateStartupButton(result.enabled);
+  
+  if (result.enabled) {
+    showNotification('✅ Startup Enabled', 'VideoNinja will start with Windows', 'success');
+  } else {
+    showNotification('❌ Startup Disabled', 'VideoNinja will not start automatically', 'info');
+  }
 });
 
 // Choose download folder
@@ -153,6 +171,175 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Ninja wisdom and battle cries!
+const ninjaQuotes = [
+  'UNGALABUNGALA!',
+  'HIYAAAA! 🥷',
+  'Shadow clone technique!',
+  'Believe it! Dattebayo!',
+  'The way of the ninja is silence...',
+  'NINJUTSU!',
+  'Omae wa mou shindeiru...',
+  'Rasengan!',
+  'Stealth mode: ACTIVATED',
+  'Like a leaf in the wind... 🍃',
+  'The blade that cuts the stream!',
+  'KAGE BUNSHIN NO JUTSU!',
+  'Silent but deadly... wait, wrong ninja.',
+  '忍者の道 (Ninja no Michi)',
+  'Parkour! Oh wait, wrong skillset.',
+  'Shuriken THROW! 🌟',
+  'The ancient scrolls speak of...',
+  'Hattori Hanzo would be proud!',
+  'Legendary ninja Jiraiya says: Research! 📖',
+  'Pervy Sage is doing "research" again... 👀',
+  'Icha Icha Paradise - best seller! 📚',
+  'The hot springs beckon... for research purposes! ♨️',
+  'A true sage needs inspiration... visual inspiration! 😏',
+  'Come come, paradise! Make-Out Tactics! 💋',
+  'Age is just a number, and I\'m researching timeless beauty!',
+  'Tsunade-sama... *nosebleed* 💉',
+  'Research makes the world go round! 🌍',
+  'The author of Icha Icha must never stop researching!',
+  'Godly powers... and godly taste! 😎',
+  'Pervy? I prefer "culturally sophisticated"! 🎭',
+  'Never underestimate the importance of good research material!',
+  'Naruto runs away... I mean, TO BATTLE!',
+  'DATTEBAYO! Believe it or not! 🍥',
+  'Ichiraku Ramen break time! 🍜',
+  'Teuchi-san makes the best ramen in the world!',
+  'I\'ll be Hokage someday, believe it! 🔥',
+  'Nine-Tails chakra: ACTIVATED! 🦊',
+  'Kurama, lend me your power!',
+  'Talk no Jutsu is the strongest technique!',
+  'I never go back on my word, that\'s my ninja way!',
+  'Sasuke, you teme! Come back to Konoha! 😤',
+  'Sakura-chan noticed me! ...in my dreams. 💭',
+  'Kakashi-sensei is late again... classic! ⏰',
+  'One day I\'ll surpass all the Hokages!',
+  'Shadow Clone Jutsu! Now we can train 100x faster! 💪',
+  'Sexy Jutsu! The ultimate technique! 💋',
+  'Harem Jutsu! Pervy Sage taught me well! 😏',
+  'Sage Mode: Toad Style! 🐸',
+  'Mount Myōboku training was intense!',
+  'Rasen-Shuriken! My own creation! 🌀',
+  'Rasenshuriken go BRRRRR! ⚡',
+  'The power of friendship and ramen! 🍜✨',
+  'Hinata-chan is so cute when she faints! 💕',
+  'Iruka-sensei believed in me from the start! 😊',
+  'I\'ll protect my friends, no matter what!',
+  'Pain... you took everything from me!',
+  'I won\'t let the cycle of hatred continue!',
+  'Jiraiya... Pervy Sage... thank you for everything! 😢',
+  'The hero of the Hidden Leaf has arrived!',
+  'Uzumaki Naruto, future Hokage! 🔶',
+  'The Five Great Nations bow to none!',
+  'Chakra levels: MAXIMUM',
+  'Substitution Jutsu! *poof* 💨',
+  'The path of the shinobi is never easy.',
+  'WASSUP NINJA STYLE!',
+  'Konohagakure sends its regards!',
+  'The Third Hokage taught me well.',
+  'Sasuke is my rival!',
+  'Kakashi-sensei would use Sharingan here.',
+  'Shadow possession complete.',
+  'Byakugan! I can see everything!',
+  'The Uchiha clan legacy lives on!',
+  'Chidori! ⚡',
+  'One thousand years of death! (uh, maybe not)',
+  'The legendary Sannin unite!',
+  'Tailed beast mode: LOADING...',
+  'Sage mode activated! 🐸',
+  'The Will of Fire burns eternal!',
+  'Shinobi rule #25: Never give up!',
+  'DYNAMIC ENTRY! 💥',
+  'Might Guy approves this taijutsu!',
+  'Rock Lee speed! No ninjutsu needed!',
+  'The Eight Gates technique... dangerous!',
+  'Akatsuki clouds gather... 🌧️',
+  'Itachi-san... the feels.',
+  'Madara Uchiha has entered the chat.',
+  'So cool! DATTEBAYO!',
+  'Ramen power! 🍜',
+  'Ichiraku Ramen is the best!',
+  'Pervy Sage! 📖',
+  'Tsunade-sama heals all wounds.',
+  'Orochimaru hissssss 🐍',
+  'The Sound Four challenge you!',
+  'Gaara of the Sand arrives.',
+  'One Tail, Two Tails, all the Tails!',
+  'Kurama the Nine-Tails says hello! 🦊',
+  'Jinchūriki power!',
+  'The Six Paths of Pain.',
+  'Nagato... such sadness.',
+  'Yahiko, Konan, Nagato - the original trio.',
+  'The Rinnegan sees all realities!',
+  'Planetary Devastation! 🌍',
+  'Shinra Tensei! BOOM!',
+  'Amaterasu black flames! 🔥',
+  'Susanoo armor ENGAGED!',
+  'Mangekyō Sharingan spinning!',
+  'Tobi is a good boy! ...or is he?',
+  'Obito... the tragedy.',
+  'Rin... the catalyst.',
+  'Kamui dimension travel!',
+  'The Ten-Tails awakens!',
+  'Kaguya Ōtsutsuki, the progenitor!',
+  'Hagoromo, the Sage of Six Paths.',
+  'Hamura Ōtsutsuki watches from the moon.',
+  'Indra and Asura, eternal cycle.',
+  'The curse of hatred vs. the will of fire.',
+  'Hashirama cells! OP!',
+  'Wood Style: Deep Forest Emergence! 🌳',
+  'Tobirama invented Flying Thunder God!',
+  'Minato the Yellow Flash! ⚡',
+  'Fourth Hokage: coolest dad ever.',
+  'Kushina: the Red Hot-Blooded Habanero! 🌶️',
+  'Uzumaki clan sealing techniques!',
+  'The Reaper Death Seal... ultimate sacrifice.',
+  'Hiruzen Sarutobi: The Professor.',
+  'All five nature transformations mastered!',
+  'Wind, Fire, Lightning, Earth, Water! 🌪️🔥⚡🌍💧',
+  'Yin-Yang Release!',
+  'Truth-Seeking Balls!',
+  'Six Paths Sage Mode!',
+  'Ashura Mode: ACTIVATED!',
+  'Indra\'s Arrow vs. Ashura!',
+  'The Valley of the End... again.',
+  'Boruto: Dad, you\'re embarrassing me.',
+  'Next generation ninja!',
+  'The era of shinobi continues!',
+  'Ninjutsu, Taijutsu, Genjutsu - the trinity!',
+  'Jōnin level achieved!',
+  'ANBU Black Ops reporting!',
+  'Root organization... shady business.',
+  'Danzō and his Sharingan arm. Creepy.',
+  'The ninja academy graduates!',
+  'Team 7 forever! 👊',
+  'The power of friendship! ✨',
+  'Ninja way: Never back down!'
+];
+
+// Ninja says random wisdom!
+const ninjaIcon = document.getElementById('ninja-icon');
+ninjaIcon.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const randomQuote = ninjaQuotes[Math.floor(Math.random() * ninjaQuotes.length)];
+  showNotification('🥷', randomQuote, 'info');
+});
+
+// Camera flash!
+const cameraIcon = document.getElementById('camera-icon');
+cameraIcon.addEventListener('click', (e) => {
+  e.stopPropagation();
+  // Flash effect
+  cameraIcon.style.filter = 'brightness(3) saturate(2)';
+  setTimeout(() => {
+    cameraIcon.style.filter = 'brightness(1) saturate(1)';
+  }, 100);
+  showNotification('📸', 'FLASH!', 'info');
+});
+
 // Toggle settings panel by clicking header
 headerToggle.addEventListener('click', () => {
   if (settingsPanelEl.style.display === 'none') {
@@ -189,21 +376,17 @@ document.addEventListener('keydown', (e) => {
 function updateDownloadsList() {
   downloadsContainerEl.innerHTML = '';
   
-  // Don't show currentDownload separately if it's also in the queue
-  // Only show it from queue (it gets removed from queue when processing starts)
-  const allDownloads = [
-    ...(queueState.queue || []),
-    ...(queueState.history || [])
-  ];
+  // Show: queue (includes current download if it exists) + history
+  const allDownloads = [];
   
-  // If there's a current download, make sure it's shown (it might not be in queue anymore)
-  if (queueState.currentDownload) {
-    // Check if it's already in history (completed/failed)
-    const inHistory = queueState.history?.some(d => d.id === queueState.currentDownload.id);
-    if (!inHistory) {
-      // Add to beginning if not in history yet
-      allDownloads.unshift(queueState.currentDownload);
-    }
+  // Add queue items (currentDownload stays in queue until moved to history)
+  if (queueState.queue && queueState.queue.length > 0) {
+    allDownloads.push(...queueState.queue);
+  }
+  
+  // Add history items
+  if (queueState.history && queueState.history.length > 0) {
+    allDownloads.push(...queueState.history);
   }
   
   if (allDownloads.length === 0) {
@@ -376,4 +559,17 @@ function showNotification(title, message, type = 'info') {
 function truncateUrl(url) {
   if (url.length <= 50) return url;
   return url.substring(0, 47) + '...';
+}
+
+/**
+ * Update startup button state
+ */
+function updateStartupButton(isEnabled) {
+  if (isEnabled) {
+    startupToggleBtn.textContent = '✅ Remove from Startup';
+    startupToggleBtn.classList.add('startup-enabled');
+  } else {
+    startupToggleBtn.textContent = '➕ Add to Startup';
+    startupToggleBtn.classList.remove('startup-enabled');
+  }
 }

@@ -102,6 +102,8 @@ async function downloadVideo(url, outputPath, options = {}, progressCallback = n
   // Add other common options
   args.push('--no-playlist'); // Don't download playlists by default
   args.push('--progress'); // Show progress
+  args.push('--continue'); // Resume partial downloads
+  args.push('--no-overwrites'); // Skip if file already fully downloaded
   
   console.log(`Starting download: ${ytdlpPath} ${args.join(' ')}`);
   

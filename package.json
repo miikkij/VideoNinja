@@ -23,12 +23,14 @@
   "author": "VideoNinja",
   "license": "MIT",
   "dependencies": {
+    "auto-launch": "^5.0.6",
     "electron-store": "^11.0.2"
   },
   "devDependencies": {
-    "electron": "^39.1.2",
+    "electron": "^39.2.0",
     "electron-builder": "^26.0.12",
-    "rimraf": "^6.0.1"
+    "rimraf": "^6.1.0",
+    "sharp": "^0.33.5"
   },
   "build": {
     "appId": "com.videoninja.app",

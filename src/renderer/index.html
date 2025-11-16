@@ -10,7 +10,7 @@
   <div class="container">
     <!-- Header - click to toggle settings, X to hide -->
     <header id="header-toggle">
-      <h1>🎬 VideoNinja 🥷</h1>
+      <h1><span id="camera-icon" style="cursor: pointer;">🎬</span> VideoNinja <span id="ninja-icon" style="cursor: pointer;">🥷</span></h1>
       <p class="subtitle">YouTube Video Downloader</p>
       <button class="close-btn" id="close-btn">✕</button>
     </header>
@@ -68,6 +68,11 @@
       <div class="disk-space" id="disk-space" style="display: none;">
         <span class="disk-space-label">Disk Space:</span>
         <span class="disk-space-value" id="disk-space-value">--</span>
+      </div>
+      
+      <div class="setting-item">
+        <label>Startup:</label>
+        <button id="startup-toggle-btn" class="btn btn-secondary">⚙️ Loading...</button>
       </div>
     </div>
 

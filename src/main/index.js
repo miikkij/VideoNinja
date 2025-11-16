@@ -3,9 +3,16 @@ const path = require('path');
 const Store = require('electron-store').default || require('electron-store');
 const { checkYtDlpAvailability, getDiskSpace, formatBytes } = require('./ytdlp');
 const DownloadQueue = require('./downloadQueue');
+const AutoLaunch = require('auto-launch');
 
 const store = new Store();
 const downloadQueue = new DownloadQueue();
+
+// Auto-launch configuration
+const autoLauncher = new AutoLaunch({
+  name: 'VideoNinja',
+  path: app.getPath('exe'),
+});
 
 let tray = null;
 let mainWindow = null;
@@ -16,8 +23,9 @@ let diskSpaceInterval = null;
 
 // Platform-specific icon paths
 const ICONS = {
-  normal: path.join(__dirname, '../assets/icons/icon.png'),
+  normal: path.join(__dirname, '../assets/icons/icon-normal.png'),
   alert: path.join(__dirname, '../assets/icons/icon-alert.png'),
+  app: path.join(__dirname, '../assets/icons/icon.png'),
 };
 
 // Simple base64 encoded 16x16 video camera icon as fallback
@@ -116,7 +124,7 @@ async function showMainWindow() {
       nodeIntegration: true,
       contextIsolation: false
     },
-    icon: usePngIcons ? ICONS.normal : undefined
+    icon: ICONS.app
   });
   
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -155,6 +163,13 @@ async function showMainWindow() {
       if (settings.downloadPath) {
         startDiskSpaceMonitoring(settings.downloadPath);
       }
+      
+      // Send startup status
+      autoLauncher.isEnabled().then(isEnabled => {
+        mainWindow.webContents.send('startup-status', isEnabled);
+      }).catch(err => {
+        console.error('Error checking startup status:', err);
+      });
       
     } catch (error) {
       console.error('Failed to initialize:', error);
@@ -374,6 +389,9 @@ downloadQueue.on('download-started', (download) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('download-started', download);
   }
+  
+  // Start flashing animation when download starts
+  startAnimation();
 });
 
 downloadQueue.on('download-progress', (progress) => {
@@ -387,19 +405,17 @@ downloadQueue.on('download-completed', (download) => {
     mainWindow.webContents.send('download-completed', download);
   }
   
-  // Flash tray icon
-  startAnimation();
-  
-  // Stop after 10 seconds
-  setTimeout(() => {
-    stopAnimation();
-  }, 10000);
+  // Stop animation when download completes
+  stopAnimation();
 });
 
 downloadQueue.on('download-failed', (download) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('download-failed', download);
   }
+  
+  // Stop animation if download fails
+  stopAnimation();
 });
 
 // ===== APP LIFECYCLE =====
