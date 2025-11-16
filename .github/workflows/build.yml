@@ -1,0 +1,52 @@
+name: Build Apps
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install pnpm
+        run: npm install -g pnpm
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Build for macOS
+        if: matrix.os == 'macos-latest'
+        run: pnpm build:mac
+        continue-on-error: true
+      
+      - name: Build for Windows
+        if: matrix.os == 'windows-latest'
+        run: pnpm build:win
+        continue-on-error: true
+      
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.os }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/win-unpacked
+          if-no-files-found: warn

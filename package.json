@@ -1,0 +1,74 @@
+{
+  "name": "fatalii-daily-offers",
+  "version": "1.0.0",
+  "description": "Desktop app for Fatalii Seeds daily offers with 20% discount",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win"
+  },
+  "keywords": [
+    "fatalii",
+    "chili",
+    "seeds",
+    "daily-offers",
+    "electron"
+  ],
+  "author": "Fatalii Seeds",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "cheerio": "^1.1.2",
+    "electron-store": "^11.0.2"
+  },
+  "devDependencies": {
+    "canvas": "^3.2.0",
+    "electron": "^39.1.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "net.fataliiseeds.dailyoffers",
+    "productName": "Fatalii's Daily Offers",
+    "forceCodeSigning": false,
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "src/assets/icons/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.lifestyle",
+      "icon": "src/assets/icons/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ]
+  },
+  "packageManager": "pnpm@10.20.0+sha512.cf9998222162dd85864d0a8102e7892e7ba4ceadebbf5a31f9c2fce48dfce317a9c53b9f6464d1ef9042cba2e02ae02a9f7c143a2b438cd93c91840f0192b9dd"
+}

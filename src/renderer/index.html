@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fatalii's Daily Offers</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🌶️ Fatalii's Daily Offers</h1>
+      <p class="subtitle">Today's varieties with 20% discount</p>
+      <button class="close-btn" id="close-btn">✕</button>
+    </header>
+
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Loading today's offers...</p>
+    </div>
+
+    <div id="error" class="error" style="display: none;">
+      <p>❌ Unable to load offers. Please try again later.</p>
+    </div>
+
+    <div id="offers-container" class="offers-container">
+      <!-- Products will be inserted here by JavaScript -->
+    </div>
+
+    <div id="actions" class="actions" style="display: none;">
+      <button id="add-all-btn" class="btn btn-primary btn-large">
+        🛒 Add All to Cart
+      </button>
+    </div>
+
+    <footer>
+      <div class="coupon-reminder">
+        💡 <strong>Use coupon code: DAILY20</strong><br>
+        at fataliiseeds.net to get 20% discount with these products
+      </div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
