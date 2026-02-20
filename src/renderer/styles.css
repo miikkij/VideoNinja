@@ -621,3 +621,260 @@ header h1 {
     justify-content: flex-end;
   }
 }
+
+/* ===== SETTINGS EXTRAS ===== */
+.settings-divider {
+  border: none;
+  border-top: 1px solid #e0d0e5;
+  margin: 20px 0;
+}
+
+.settings-panel h3 {
+  color: #555;
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.settings-hint {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin-top: 4px;
+  margin-bottom: 10px;
+}
+
+/* ===== ADVANCED OPTIONS TOGGLE ===== */
+.advanced-toggle {
+  font-size: 13px;
+  color: #667eea;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 0;
+  font-weight: 600;
+  transition: color 0.2s;
+}
+
+.advanced-toggle:hover {
+  color: #C239B3;
+}
+
+.advanced-toggle-icon {
+  display: inline-block;
+  transition: transform 0.2s;
+  font-size: 10px;
+}
+
+.advanced-toggle-icon.open {
+  transform: rotate(90deg);
+}
+
+.advanced-options {
+  background: #f8f9fb;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+  padding: 14px;
+  margin-top: 4px;
+}
+
+.adv-option {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.adv-option label {
+  font-size: 13px;
+  color: #444;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.adv-option input[type="checkbox"] {
+  accent-color: #C239B3;
+}
+
+.select-small {
+  padding: 6px 10px;
+  font-size: 13px;
+  max-width: 160px;
+}
+
+.input-small {
+  padding: 6px 10px !important;
+  font-size: 13px !important;
+  flex: 1;
+  min-width: 120px;
+}
+
+/* ===== MODAL ===== */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20000;
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  background: white;
+  border-radius: 14px;
+  width: 520px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  animation: modalIn 0.2s ease-out;
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 22px;
+  border-bottom: 1px solid #eee;
+}
+
+.modal-header h3 {
+  font-size: 18px;
+  color: #333;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: #999;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.modal-close:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.modal-body {
+  padding: 18px 22px;
+}
+
+.modal-hint {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 12px;
+}
+
+.retry-url {
+  font-size: 13px;
+  color: #667eea;
+  font-family: 'Courier New', monospace;
+  background: #f0f4ff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.retry-error {
+  font-size: 12px;
+  color: #dc3545;
+  background: #fff5f5;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border-left: 3px solid #dc3545;
+  margin-bottom: 16px;
+  max-height: 100px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.strategy-group {
+  margin-bottom: 16px;
+}
+
+.strategy-group h4 {
+  font-size: 14px;
+  color: #555;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #eee;
+}
+
+.strategy-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #444;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.strategy-option input[type="checkbox"] {
+  accent-color: #C239B3;
+  flex-shrink: 0;
+}
+
+.strategy-option span {
+  white-space: nowrap;
+}
+
+.strategy-option .select-small,
+.strategy-option .input-small {
+  margin-left: auto;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px;
+  border-top: 1px solid #eee;
+}
+
+/* ===== JS RUNTIME STATUS ===== */
+.js-runtime-status {
+  font-size: 13px;
+  padding: 6px 10px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  font-family: 'Courier New', monospace;
+}
+
+/* ===== STRATEGY HINTS ===== */
+.strategy-hint {
+  font-size: 12px;
+  color: #856404;
+  background: #fff3cd;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin: 4px 0 4px 26px;
+  border-left: 3px solid #ffc107;
+  display: none;
+}

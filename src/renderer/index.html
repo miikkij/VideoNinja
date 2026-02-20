@@ -77,6 +77,62 @@
         <label>Startup:</label>
         <button id="startup-toggle-btn" class="btn btn-secondary">⚙️ Loading...</button>
       </div>
+
+      <hr class="settings-divider">
+      <h3>🍪 Cookie / Authentication</h3>
+      <p class="settings-hint">Required for Instagram, age-restricted YouTube, and login-protected content.<br>
+        <strong>⚠️ Firefox recommended!</strong> Chrome/Edge cookies often fail on Windows due to DPAPI encryption.
+        Use Firefox or export cookies to a Netscape file with a browser extension.</p>
+      
+      <div class="setting-item">
+        <label>Cookie Source:</label>
+        <select id="cookie-source" class="select">
+          <option value="">None (no cookies)</option>
+          <option value="chrome">Chrome</option>
+          <option value="firefox">Firefox</option>
+          <option value="edge">Edge</option>
+          <option value="brave">Brave</option>
+          <option value="opera">Opera</option>
+          <option value="safari">Safari</option>
+          <option value="chromium">Chromium</option>
+          <option value="vivaldi">Vivaldi</option>
+          <option value="file">Cookie File (Netscape format)</option>
+        </select>
+      </div>
+      
+      <div class="setting-item" id="cookie-file-setting" style="display: none;">
+        <label>Cookie File:</label>
+        <div class="input-with-button">
+          <input type="text" id="cookie-file-path" readonly class="input-readonly" placeholder="Select a Netscape cookie file...">
+          <button id="choose-cookie-file-btn" class="btn btn-secondary">📄 Choose</button>
+        </div>
+      </div>
+
+      <hr class="settings-divider">
+      <h3>🔧 Advanced</h3>
+      
+      <div class="setting-item">
+        <label>JavaScript Runtime:</label>
+        <div class="js-runtime-status" id="js-runtime-status">Detecting...</div>
+        <select id="js-runtime-select" class="select">
+          <option value="auto">Auto-detect (recommended)</option>
+          <option value="nodejs">Node.js</option>
+          <option value="deno">Deno</option>
+          <option value="bun">Bun</option>
+        </select>
+        <span class="settings-hint">Required for YouTube. yt-dlp needs a JS runtime to decode YouTube's player.</span>
+      </div>
+      
+      <div class="setting-item">
+        <label>Custom User-Agent:</label>
+        <input type="text" id="custom-user-agent" class="input-url" placeholder="Leave empty for default">
+      </div>
+      
+      <div class="setting-item">
+        <label>Extra yt-dlp Arguments:</label>
+        <input type="text" id="extra-args" class="input-url" placeholder="e.g. --geo-bypass --sleep-interval 5">
+        <span class="settings-hint">Space-separated extra arguments passed to yt-dlp</span>
+      </div>
     </div>
 
     <!-- Download Panel -->
@@ -99,6 +155,35 @@
           
           <button id="start-download-btn" class="btn btn-primary">⬇️ Start Download</button>
         </div>
+        
+        <!-- Per-download advanced options toggle -->
+        <div class="advanced-toggle" id="advanced-toggle">
+          <span class="advanced-toggle-icon" id="advanced-toggle-icon">▶</span> Advanced Options
+        </div>
+        <div class="advanced-options" id="advanced-options" style="display: none;">
+          <div class="adv-option">
+            <label><input type="checkbox" id="adv-override-cookies"> Override cookie source for this download</label>
+            <select id="adv-cookie-source" class="select select-small" disabled>
+              <option value="chrome">Chrome</option>
+              <option value="firefox">Firefox</option>
+              <option value="edge">Edge</option>
+              <option value="brave">Brave</option>
+              <option value="opera">Opera</option>
+              <option value="safari">Safari</option>
+            </select>
+          </div>
+          <div class="adv-option">
+            <label><input type="checkbox" id="adv-force-ipv4"> Force IPv4</label>
+          </div>
+          <div class="adv-option">
+            <label><input type="checkbox" id="adv-custom-referer"> Custom Referer</label>
+            <input type="text" id="adv-referer" class="input-url input-small" placeholder="https://..." disabled>
+          </div>
+          <div class="adv-option">
+            <label><input type="checkbox" id="adv-extractor-args"> Extractor Args</label>
+            <input type="text" id="adv-extractor-args-value" class="input-url input-small" placeholder='e.g. youtube:player_client=web' disabled>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -113,6 +198,85 @@
     <div class="loading" id="loading">
       <div class="spinner"></div>
       <p>Initializing...</p>
+    </div>
+  </div>
+
+  <!-- Retry With Options Modal -->
+  <div class="modal-overlay" id="retry-modal" style="display: none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>🔄 Retry with Special Options</h3>
+        <button class="modal-close" id="retry-modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">Select strategies to overcome download failures:</p>
+        <div class="retry-url" id="retry-url"></div>
+        <div class="retry-error" id="retry-error"></div>
+        
+        <div class="retry-strategies">
+          <div class="strategy-group">
+            <h4>🍪 Authentication</h4>
+            <label class="strategy-option">
+              <input type="checkbox" id="retry-use-cookies" checked>
+              <span>Use browser cookies</span>
+              <select id="retry-cookie-browser" class="select select-small">
+                <option value="firefox">Firefox (recommended)</option>
+                <option value="chrome">Chrome</option>
+                <option value="edge">Edge</option>
+                <option value="brave">Brave</option>
+                <option value="opera">Opera</option>
+                <option value="safari">Safari</option>
+              </select>
+            </label>
+            <div class="strategy-hint" id="retry-cookie-hint"></div>
+          </div>
+          
+          <div class="strategy-group">
+            <h4>🌐 Network</h4>
+            <label class="strategy-option">
+              <input type="checkbox" id="retry-force-ipv4">
+              <span>Force IPv4</span>
+            </label>
+            <label class="strategy-option">
+              <input type="checkbox" id="retry-custom-ua">
+              <span>Custom User-Agent</span>
+              <input type="text" id="retry-ua-value" class="input-url input-small" placeholder="Mozilla/5.0 ..." disabled>
+            </label>
+            <label class="strategy-option">
+              <input type="checkbox" id="retry-referer">
+              <span>Set Referer</span>
+              <input type="text" id="retry-referer-value" class="input-url input-small" placeholder="https://..." disabled>
+            </label>
+          </div>
+          
+          <div class="strategy-group">
+            <h4>⚙️ Extractor</h4>
+            <label class="strategy-option">
+              <input type="checkbox" id="retry-js-runtime">
+              <span>JS Runtime</span>
+              <select id="retry-js-runtime-value" class="select select-small" disabled>
+                <option value="nodejs">Node.js</option>
+                <option value="deno">Deno</option>
+                <option value="bun">Bun</option>
+              </select>
+            </label>
+            <label class="strategy-option">
+              <input type="checkbox" id="retry-extractor-args">
+              <span>Extractor Args</span>
+              <input type="text" id="retry-extractor-value" class="input-url input-small" placeholder='youtube:player_client=web' disabled>
+            </label>
+            <label class="strategy-option">
+              <input type="checkbox" id="retry-extra-args">
+              <span>Extra Arguments</span>
+              <input type="text" id="retry-extra-value" class="input-url input-small" placeholder="--geo-bypass --sleep-interval 3" disabled>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="retry-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="retry-modal-go">🔄 Retry Download</button>
+      </div>
     </div>
   </div>
 

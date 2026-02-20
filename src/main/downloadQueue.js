@@ -163,6 +163,29 @@ class DownloadQueue extends EventEmitter {
   }
 
   /**
+   * Retry a failed download with new/overridden options
+   * @param {string} id - Download ID
+   * @param {object} overrideOptions - Options to override for the retry
+   */
+  retryWithOptions(id, overrideOptions = {}) {
+    const download = this.history.find(d => d.id === id && d.status === 'failed');
+    if (download) {
+      const mergedOptions = { ...download.options, ...overrideOptions };
+      return this.addDownload(download.url, download.outputPath, mergedOptions);
+    }
+    return null;
+  }
+
+  /**
+   * Get a download from history by ID
+   * @param {string} id - Download ID
+   * @returns {object|null}
+   */
+  getDownload(id) {
+    return this.history.find(d => d.id === id) || this.queue.find(d => d.id === id) || null;
+  }
+
+  /**
    * Load queue state from storage
    * @param {object} state - Saved state
    */

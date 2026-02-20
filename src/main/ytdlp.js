@@ -7,8 +7,51 @@ const os = require('os');
 const execAsync = promisify(exec);
 
 /**
+ * Detect available JavaScript runtimes for yt-dlp (needed for YouTube)
+ */
+async function detectJsRuntimes() {
+  const runtimes = [];
+  const isWindows = process.platform === 'win32';
+  
+  // Check for Node.js
+  try {
+    const cmd = isWindows ? 'where.exe node' : 'which node';
+    const { stdout } = await execAsync(cmd, { timeout: 3000 });
+    const nodePath = stdout.trim().split('\n')[0].trim();
+    if (nodePath) {
+      runtimes.push({ name: 'nodejs', path: nodePath });
+    }
+  } catch (e) { /* not found */ }
+  
+  // Check for deno
+  try {
+    const cmd = isWindows ? 'where.exe deno' : 'which deno';
+    const { stdout } = await execAsync(cmd, { timeout: 3000 });
+    const denoPath = stdout.trim().split('\n')[0].trim();
+    if (denoPath) {
+      runtimes.push({ name: 'deno', path: denoPath });
+    }
+  } catch (e) { /* not found */ }
+  
+  // Check for bun
+  try {
+    const cmd = isWindows ? 'where.exe bun' : 'which bun';
+    const { stdout } = await execAsync(cmd, { timeout: 3000 });
+    const bunPath = stdout.trim().split('\n')[0].trim();
+    if (bunPath) {
+      runtimes.push({ name: 'bun', path: bunPath });
+    }
+  } catch (e) { /* not found */ }
+  
+  return runtimes;
+}
+
+// Cache detected runtimes
+let cachedRuntimes = null;
+
+/**
  * Check if yt-dlp is available on the system
- * @returns {Promise<{available: boolean, path: string|null, version: string|null}>}
+ * @returns {Promise<{available: boolean, path: string|null, version: string|null, jsRuntimes: Array}>}
  */
 async function checkYtDlpAvailability() {
   const isWindows = process.platform === 'win32';
@@ -45,10 +88,18 @@ async function checkYtDlpAvailability() {
       const version = stdout.trim();
       
       console.log(`Found yt-dlp at: ${location}, version: ${version}`);
+      
+      // Detect JS runtimes
+      if (!cachedRuntimes) {
+        cachedRuntimes = await detectJsRuntimes();
+        console.log('Detected JS runtimes:', cachedRuntimes.map(r => r.name).join(', ') || 'none');
+      }
+      
       return {
         available: true,
         path: location,
-        version: version
+        version: version,
+        jsRuntimes: cachedRuntimes
       };
     } catch (error) {
       // Continue to next location
@@ -60,7 +111,8 @@ async function checkYtDlpAvailability() {
   return {
     available: false,
     path: null,
-    version: null
+    version: null,
+    jsRuntimes: []
   };
 }
 
@@ -97,6 +149,50 @@ async function downloadVideo(url, outputPath, options = {}, progressCallback = n
   if (options.subtitles) {
     args.push('--write-subs');
     args.push('--sub-lang', options.subtitleLang || 'en');
+  }
+  
+  // === COOKIE / AUTH OPTIONS ===
+  if (options.cookiesFromBrowser) {
+    args.push('--cookies-from-browser', options.cookiesFromBrowser);
+  } else if (options.cookieFile) {
+    args.push('--cookies', options.cookieFile);
+  }
+  
+  // === CUSTOM USER-AGENT ===
+  if (options.userAgent) {
+    args.push('--user-agent', options.userAgent);
+  }
+  
+  // === CUSTOM REFERER ===
+  if (options.referer) {
+    args.push('--referer', options.referer);
+  }
+  
+  // === FORCE IPv4 ===
+  if (options.forceIpv4) {
+    args.push('--force-ipv4');
+  }
+  
+  // === EXTRACTOR ARGUMENTS ===
+  if (options.extractorArgs) {
+    args.push('--extractor-args', options.extractorArgs);
+  }
+  
+  // === JS RUNTIME (required for YouTube on modern yt-dlp) ===
+  if (options.jsRuntime) {
+    args.push('--js-runtimes', options.jsRuntime);
+  } else if (cachedRuntimes && cachedRuntimes.length > 0) {
+    // Auto-detect: prefer nodejs since it's most commonly available
+    const preferred = cachedRuntimes.find(r => r.name === 'nodejs') || cachedRuntimes[0];
+    args.push('--js-runtimes', preferred.name);
+  }
+  
+  // === EXTRA RAW ARGUMENTS ===
+  if (options.extraArgs && options.extraArgs.length > 0) {
+    const extraList = Array.isArray(options.extraArgs) 
+      ? options.extraArgs 
+      : options.extraArgs.split(/\s+/).filter(a => a);
+    args.push(...extraList);
   }
   
   // Add other common options

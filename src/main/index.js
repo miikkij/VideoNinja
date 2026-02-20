@@ -352,6 +352,40 @@ ipcMain.on('retry-download', (event, downloadId) => {
 });
 
 /**
+ * Retry download with special options (for overcoming download challenges)
+ */
+ipcMain.on('retry-with-options', (event, { downloadId, options }) => {
+  const newId = downloadQueue.retryWithOptions(downloadId, options);
+  event.reply('download-retried', { oldId: downloadId, newId });
+});
+
+/**
+ * Get download info for retry modal
+ */
+ipcMain.handle('get-download-info', async (event, downloadId) => {
+  return downloadQueue.getDownload(downloadId);
+});
+
+/**
+ * Choose cookie file
+ */
+ipcMain.handle('choose-cookie-file', async (event) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [
+      { name: 'Cookie Files', extensions: ['txt', 'cookies'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+  
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths[0];
+  }
+  
+  return null;
+});
+
+/**
  * Open downloaded video
  */
 ipcMain.on('open-video', (event, filepath) => {

@@ -26,6 +26,37 @@ const headerToggle = document.getElementById('header-toggle');
 const closeBtn = document.getElementById('close-btn');
 const startupToggleBtn = document.getElementById('startup-toggle-btn');
 
+// Cookie / Auth elements
+const cookieSourceSelect = document.getElementById('cookie-source');
+const cookieFileSetting = document.getElementById('cookie-file-setting');
+const cookieFilePathInput = document.getElementById('cookie-file-path');
+const chooseCookieFileBtn = document.getElementById('choose-cookie-file-btn');
+const customUserAgentInput = document.getElementById('custom-user-agent');
+const extraArgsInput = document.getElementById('extra-args');
+const jsRuntimeSelect = document.getElementById('js-runtime-select');
+const jsRuntimeStatus = document.getElementById('js-runtime-status');
+
+// Advanced per-download options
+const advancedToggle = document.getElementById('advanced-toggle');
+const advancedToggleIcon = document.getElementById('advanced-toggle-icon');
+const advancedOptions = document.getElementById('advanced-options');
+const advOverrideCookies = document.getElementById('adv-override-cookies');
+const advCookieSource = document.getElementById('adv-cookie-source');
+const advForceIpv4 = document.getElementById('adv-force-ipv4');
+const advCustomReferer = document.getElementById('adv-custom-referer');
+const advReferer = document.getElementById('adv-referer');
+const advExtractorArgs = document.getElementById('adv-extractor-args');
+const advExtractorArgsValue = document.getElementById('adv-extractor-args-value');
+
+// Retry modal elements
+const retryModal = document.getElementById('retry-modal');
+const retryModalClose = document.getElementById('retry-modal-close');
+const retryModalCancel = document.getElementById('retry-modal-cancel');
+const retryModalGo = document.getElementById('retry-modal-go');
+const retryUrlEl = document.getElementById('retry-url');
+const retryErrorEl = document.getElementById('retry-error');
+let retryDownloadId = null;
+
 // ===== INITIALIZATION =====
 
 // Listen for yt-dlp status
@@ -39,6 +70,17 @@ ipcRenderer.on('ytdlp-status', (event, ytdlpInfo) => {
     // Show just a simple "Found" badge instead of the full path
     // Settings panel is hidden by default, toggle with § key
     settingsPanelEl.style.display = 'none';
+    
+    // Show JS runtime status
+    if (ytdlpInfo.jsRuntimes && ytdlpInfo.jsRuntimes.length > 0) {
+      const names = ytdlpInfo.jsRuntimes.map(r => r.name).join(', ');
+      jsRuntimeStatus.textContent = `\u2705 Found: ${names}`;
+      jsRuntimeStatus.style.color = '#155724';
+    } else {
+      jsRuntimeStatus.textContent = '\u26a0\ufe0f No JS runtime found! YouTube will not work. Install Node.js or Deno.';
+      jsRuntimeStatus.style.color = '#dc3545';
+      showNotification('\u26a0\ufe0f Missing JS Runtime', 'YouTube downloads need Node.js or Deno. Install one and restart.', 'warning');
+    }
   } else {
     ytdlpMissingEl.style.display = 'block';
   }
@@ -55,6 +97,26 @@ ipcRenderer.on('settings-loaded', (event, loadedSettings) => {
     // Show download panel
     downloadPanelEl.style.display = 'block';
     downloadsListEl.style.display = 'block';
+  }
+  
+  // Restore cookie/auth settings
+  if (settings.cookieSource) {
+    cookieSourceSelect.value = settings.cookieSource;
+    if (settings.cookieSource === 'file') {
+      cookieFileSetting.style.display = 'block';
+    }
+  }
+  if (settings.cookieFilePath) {
+    cookieFilePathInput.value = settings.cookieFilePath;
+  }
+  if (settings.userAgent) {
+    customUserAgentInput.value = settings.userAgent;
+  }
+  if (settings.extraArgs) {
+    extraArgsInput.value = settings.extraArgs;
+  }
+  if (settings.jsRuntime) {
+    jsRuntimeSelect.value = settings.jsRuntime;
   }
   
   // Show settings hint notification
@@ -213,7 +275,7 @@ startDownloadBtn.addEventListener('click', () => {
   const url = videoUrlInput.value.trim();
   
   if (!url) {
-    showNotification('⚠️ No URL', 'Please enter a YouTube URL', 'warning');
+    showNotification('⚠️ No URL', 'Please enter a video URL', 'warning');
     return;
   }
   
@@ -227,6 +289,45 @@ startDownloadBtn.addEventListener('click', () => {
   
   if (format) {
     options.format = format;
+  }
+  
+  // Apply global cookie/auth settings
+  const cookieSource = cookieSourceSelect.value;
+  if (cookieSource === 'file' && settings.cookieFilePath) {
+    options.cookieFile = settings.cookieFilePath;
+  } else if (cookieSource && cookieSource !== 'file') {
+    options.cookiesFromBrowser = cookieSource;
+  }
+  
+  // Apply global user-agent
+  if (customUserAgentInput.value.trim()) {
+    options.userAgent = customUserAgentInput.value.trim();
+  }
+  
+  // Apply global extra args
+  if (extraArgsInput.value.trim()) {
+    options.extraArgs = extraArgsInput.value.trim();
+  }
+  
+  // Apply JS runtime setting
+  const jsRuntimeVal = jsRuntimeSelect.value;
+  if (jsRuntimeVal && jsRuntimeVal !== 'auto') {
+    options.jsRuntime = jsRuntimeVal;
+  }
+  
+  // Apply per-download advanced overrides
+  if (advOverrideCookies.checked) {
+    options.cookiesFromBrowser = advCookieSource.value;
+    delete options.cookieFile;
+  }
+  if (advForceIpv4.checked) {
+    options.forceIpv4 = true;
+  }
+  if (advCustomReferer.checked && advReferer.value.trim()) {
+    options.referer = advReferer.value.trim();
+  }
+  if (advExtractorArgs.checked && advExtractorArgsValue.value.trim()) {
+    options.extractorArgs = advExtractorArgsValue.value.trim();
   }
   
   // Add to download queue
@@ -458,6 +559,205 @@ document.addEventListener('keydown', (e) => {
       settingsPanelEl.style.display = 'none';
     }
   }
+  // Close retry modal with Escape
+  if (e.key === 'Escape' && retryModal.style.display !== 'none') {
+    retryModal.style.display = 'none';
+  }
+});
+
+// ===== COOKIE / AUTH SETTINGS =====
+
+// Cookie source change
+cookieSourceSelect.addEventListener('change', () => {
+  const val = cookieSourceSelect.value;
+  cookieFileSetting.style.display = val === 'file' ? 'block' : 'none';
+  settings.cookieSource = val;
+  ipcRenderer.send('save-settings', settings);
+});
+
+// Choose cookie file
+chooseCookieFileBtn.addEventListener('click', async () => {
+  const filePath = await ipcRenderer.invoke('choose-cookie-file');
+  if (filePath) {
+    cookieFilePathInput.value = filePath;
+    settings.cookieFilePath = filePath;
+    ipcRenderer.send('save-settings', settings);
+  }
+});
+
+// Save user-agent on blur
+customUserAgentInput.addEventListener('change', () => {
+  settings.userAgent = customUserAgentInput.value.trim();
+  ipcRenderer.send('save-settings', settings);
+});
+
+// Save extra args on blur
+extraArgsInput.addEventListener('change', () => {
+  settings.extraArgs = extraArgsInput.value.trim();
+  ipcRenderer.send('save-settings', settings);
+});
+
+// Save JS runtime selection
+jsRuntimeSelect.addEventListener('change', () => {
+  settings.jsRuntime = jsRuntimeSelect.value;
+  ipcRenderer.send('save-settings', settings);
+});
+
+// ===== ADVANCED OPTIONS TOGGLE =====
+
+advancedToggle.addEventListener('click', () => {
+  const isOpen = advancedOptions.style.display !== 'none';
+  advancedOptions.style.display = isOpen ? 'none' : 'block';
+  advancedToggleIcon.classList.toggle('open', !isOpen);
+});
+
+// Enable/disable per-download override fields
+advOverrideCookies.addEventListener('change', () => {
+  advCookieSource.disabled = !advOverrideCookies.checked;
+});
+advCustomReferer.addEventListener('change', () => {
+  advReferer.disabled = !advCustomReferer.checked;
+});
+advExtractorArgs.addEventListener('change', () => {
+  advExtractorArgsValue.disabled = !advExtractorArgs.checked;
+});
+
+// ===== RETRY MODAL =====
+
+function openRetryModal(downloadId) {
+  retryDownloadId = downloadId;
+  
+  // Find the download in state
+  const download = [...(queueState.history || []), ...(queueState.queue || [])].find(d => d.id === downloadId);
+  if (!download) return;
+  
+  retryUrlEl.textContent = download.url;
+  retryErrorEl.textContent = download.error || 'Unknown error';
+  
+  // Auto-detect suggestions based on error and URL
+  const error = (download.error || '').toLowerCase();
+  const url = (download.url || '').toLowerCase();
+  
+  // Detect cookie DPAPI/copy errors
+  const hasCookieError = error.includes('dpapi') || error.includes('could not copy') || 
+    error.includes('cookie database');
+  const cookieHintEl = document.getElementById('retry-cookie-hint');
+  
+  // Auto-check cookies for Instagram, login-required errors
+  const needsCookies = url.includes('instagram') || url.includes('tiktok') || 
+    error.includes('login') || error.includes('cookie') || error.includes('csrf') || 
+    error.includes('empty media') || error.includes('403') || error.includes('rate-limit');
+  document.getElementById('retry-use-cookies').checked = needsCookies;
+  
+  // If Chrome/Edge cookies failed, show hint and default to Firefox
+  if (hasCookieError) {
+    document.getElementById('retry-use-cookies').checked = true;
+    document.getElementById('retry-cookie-browser').value = 'firefox';
+    cookieHintEl.textContent = '\u26a0\ufe0f Chrome/Edge cookies failed (DPAPI encryption). Try Firefox, or export cookies to a Netscape file using a browser extension.';
+    cookieHintEl.style.display = 'block';
+  } else if (needsCookies) {
+    document.getElementById('retry-cookie-browser').value = 'firefox';
+    cookieHintEl.textContent = '\ud83d\udca1 Firefox is recommended — Chrome/Edge cookies often fail on Windows.';
+    cookieHintEl.style.display = 'block';
+  } else {
+    cookieHintEl.textContent = '';
+    cookieHintEl.style.display = 'none';
+  }
+  
+  // Detect YouTube JS runtime issues
+  const isYoutubeJsIssue = url.includes('youtube') && (
+    error.includes('javascript runtime') || error.includes('js runtime') || 
+    error.includes('js-runtimes') || error.includes('deno is enabled') ||
+    error.includes('postprocessing') || error.includes('stream #'));
+  const jsRuntimeCheckbox = document.getElementById('retry-js-runtime');
+  const jsRuntimeValueEl = document.getElementById('retry-js-runtime-value');
+  jsRuntimeCheckbox.checked = isYoutubeJsIssue;
+  jsRuntimeValueEl.disabled = !isYoutubeJsIssue;
+  if (isYoutubeJsIssue) {
+    jsRuntimeValueEl.value = 'nodejs';
+  }
+  
+  // Auto-suggest extractor args for YouTube nsig issues
+  const isYoutubeNsig = url.includes('youtube') && (error.includes('nsig') || error.includes('empty'));
+  document.getElementById('retry-extractor-args').checked = isYoutubeNsig;
+  const extractorInput = document.getElementById('retry-extractor-value');
+  if (isYoutubeNsig) {
+    extractorInput.value = 'youtube:player_client=web';
+    extractorInput.disabled = false;
+  } else {
+    extractorInput.value = '';
+    extractorInput.disabled = true;
+  }
+  
+  // Reset other fields
+  document.getElementById('retry-force-ipv4').checked = false;
+  document.getElementById('retry-custom-ua').checked = false;
+  document.getElementById('retry-ua-value').disabled = true;
+  document.getElementById('retry-referer').checked = false;
+  document.getElementById('retry-referer-value').disabled = true;
+  document.getElementById('retry-extra-args').checked = false;
+  document.getElementById('retry-extra-value').disabled = true;
+  document.getElementById('retry-extra-value').value = '';
+  
+  retryModal.style.display = 'flex';
+}
+
+// Retry modal checkbox toggles
+document.getElementById('retry-custom-ua').addEventListener('change', function () {
+  document.getElementById('retry-ua-value').disabled = !this.checked;
+});
+document.getElementById('retry-referer').addEventListener('change', function () {
+  document.getElementById('retry-referer-value').disabled = !this.checked;
+});
+document.getElementById('retry-extractor-args').addEventListener('change', function () {
+  document.getElementById('retry-extractor-value').disabled = !this.checked;
+});
+document.getElementById('retry-extra-args').addEventListener('change', function () {
+  document.getElementById('retry-extra-value').disabled = !this.checked;
+});
+document.getElementById('retry-js-runtime').addEventListener('change', function () {
+  document.getElementById('retry-js-runtime-value').disabled = !this.checked;
+});
+
+// Close retry modal
+retryModalClose.addEventListener('click', () => { retryModal.style.display = 'none'; });
+retryModalCancel.addEventListener('click', () => { retryModal.style.display = 'none'; });
+
+// Execute retry with options
+retryModalGo.addEventListener('click', () => {
+  if (!retryDownloadId) return;
+  
+  const options = {};
+  
+  if (document.getElementById('retry-use-cookies').checked) {
+    options.cookiesFromBrowser = document.getElementById('retry-cookie-browser').value;
+  }
+  if (document.getElementById('retry-js-runtime').checked) {
+    options.jsRuntime = document.getElementById('retry-js-runtime-value').value;
+  }
+  if (document.getElementById('retry-force-ipv4').checked) {
+    options.forceIpv4 = true;
+  }
+  if (document.getElementById('retry-custom-ua').checked) {
+    const ua = document.getElementById('retry-ua-value').value.trim();
+    if (ua) options.userAgent = ua;
+  }
+  if (document.getElementById('retry-referer').checked) {
+    const ref = document.getElementById('retry-referer-value').value.trim();
+    if (ref) options.referer = ref;
+  }
+  if (document.getElementById('retry-extractor-args').checked) {
+    const ea = document.getElementById('retry-extractor-value').value.trim();
+    if (ea) options.extractorArgs = ea;
+  }
+  if (document.getElementById('retry-extra-args').checked) {
+    const extra = document.getElementById('retry-extra-value').value.trim();
+    if (extra) options.extraArgs = extra;
+  }
+  
+  ipcRenderer.send('retry-with-options', { downloadId: retryDownloadId, options });
+  retryModal.style.display = 'none';
+  showNotification('🔄 Retrying', 'Download queued with special options! 🥷', 'info');
 });
 
 // ===== UI FUNCTIONS =====
@@ -564,7 +864,8 @@ function createDownloadActions(download) {
   
   if (download.status === 'failed') {
     return `
-      <button class="btn-icon" data-action="retry" title="Retry">🔄</button>
+      <button class="btn-icon" data-action="retry-options" title="Retry with Options">🛠️</button>
+      <button class="btn-icon" data-action="retry" title="Quick Retry">🔄</button>
     `;
   }
   
@@ -593,6 +894,8 @@ function setupDownloadActions(el, download) {
         ipcRenderer.send('show-in-folder', download.filepath);
       } else if (action === 'retry') {
         ipcRenderer.send('retry-download', download.id);
+      } else if (action === 'retry-options') {
+        openRetryModal(download.id);
       } else if (action === 'cancel') {
         ipcRenderer.send('cancel-download', download.id);
       }
