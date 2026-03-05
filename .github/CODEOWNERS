@@ -1,0 +1,8 @@
+# Default owner for everything
+* @miikkij
+
+# Frontend
+/src/renderer/ @miikkij
+
+# Backend
+/src/main/ @miikkij
