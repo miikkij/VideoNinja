@@ -170,7 +170,16 @@ class DownloadQueue extends EventEmitter {
   retryWithOptions(id, overrideOptions = {}) {
     const download = this.history.find(d => d.id === id && d.status === 'failed');
     if (download) {
-      const mergedOptions = { ...download.options, ...overrideOptions };
+      // Start from override options (what the retry modal selected).
+      // Only carry over non-auth/non-network settings from the original
+      // that aren't already in the override, like 'format' and 'subtitles'.
+      const safeOriginal = {};
+      if (download.options.format) safeOriginal.format = download.options.format;
+      if (download.options.subtitles) {
+        safeOriginal.subtitles = download.options.subtitles;
+        safeOriginal.subtitleLang = download.options.subtitleLang;
+      }
+      const mergedOptions = { ...safeOriginal, ...overrideOptions };
       return this.addDownload(download.url, download.outputPath, mergedOptions);
     }
     return null;

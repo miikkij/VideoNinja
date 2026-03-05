@@ -573,6 +573,26 @@ cookieSourceSelect.addEventListener('change', () => {
   cookieFileSetting.style.display = val === 'file' ? 'block' : 'none';
   settings.cookieSource = val;
   ipcRenderer.send('save-settings', settings);
+  
+  // Show contextual tips
+  const tipsEl = document.getElementById('cookie-tips');
+  if (val === 'file') {
+    tipsEl.innerHTML = '<strong>How to export cookies:</strong><ol>' +
+      '<li>Install a cookie export extension in Chrome (e.g. "Get cookies.txt LOCALLY")</li>' +
+      '<li>Go to the site you want to download from (Instagram, YouTube, etc.)</li>' +
+      '<li>Click the extension icon and export cookies for that site</li>' +
+      '<li>Save the .txt file and select it below</li></ol>';
+    tipsEl.style.display = 'block';
+  } else if (val === 'chrome' || val === 'edge') {
+    tipsEl.innerHTML = '<strong>⚠️ Important:</strong> You must <strong>completely close ' + 
+      (val === 'chrome' ? 'Chrome' : 'Edge') + '</strong> before downloading ' +
+      '(check Task Manager — end all background processes too). ' +
+      'The browser locks its cookie database while running.<br>' +
+      'If this doesn\'t work, use <strong>Cookie File</strong> export instead — it\'s the most reliable method.';
+    tipsEl.style.display = 'block';
+  } else {
+    tipsEl.style.display = 'none';
+  }
 });
 
 // Choose cookie file
@@ -638,26 +658,26 @@ function openRetryModal(downloadId) {
   const error = (download.error || '').toLowerCase();
   const url = (download.url || '').toLowerCase();
   
-  // Detect cookie DPAPI/copy errors
+  // Detect cookie DPAPI/copy errors (browser can't share cookie DB)
   const hasCookieError = error.includes('dpapi') || error.includes('could not copy') || 
     error.includes('cookie database');
   const cookieHintEl = document.getElementById('retry-cookie-hint');
   
-  // Auto-check cookies for Instagram, login-required errors
-  const needsCookies = url.includes('instagram') || url.includes('tiktok') || 
-    error.includes('login') || error.includes('cookie') || error.includes('csrf') || 
-    error.includes('empty media') || error.includes('403') || error.includes('rate-limit');
+  // Auto-check cookies for Instagram, login-required errors (but NOT for cookie-copy errors)
+  const needsCookies = !hasCookieError && (
+    url.includes('instagram') || url.includes('tiktok') || 
+    error.includes('login') || error.includes('csrf') || 
+    error.includes('empty media') || error.includes('403') || error.includes('rate-limit'));
   document.getElementById('retry-use-cookies').checked = needsCookies;
   
-  // If Chrome/Edge cookies failed, show hint and default to Firefox
+  // If Chrome/Edge cookies failed, show hint but do NOT auto-check cookies (that's what failed!)
   if (hasCookieError) {
-    document.getElementById('retry-use-cookies').checked = true;
-    document.getElementById('retry-cookie-browser').value = 'firefox';
-    cookieHintEl.textContent = '\u26a0\ufe0f Chrome/Edge cookies failed (DPAPI encryption). Try Firefox, or export cookies to a Netscape file using a browser extension.';
+    document.getElementById('retry-use-cookies').checked = false;
+    cookieHintEl.textContent = '⚠️ Browser cookie access failed last time. Try without cookies first. If the site needs authentication, close Chrome/Edge completely (including background processes) and re-enable cookies, or use Cookie File export.';
     cookieHintEl.style.display = 'block';
   } else if (needsCookies) {
-    document.getElementById('retry-cookie-browser').value = 'firefox';
-    cookieHintEl.textContent = '\ud83d\udca1 Firefox is recommended — Chrome/Edge cookies often fail on Windows.';
+    document.getElementById('retry-cookie-browser').value = 'chrome';
+    cookieHintEl.textContent = '💡 Close Chrome completely before retrying. If it still fails, export cookies to a file using a Chrome extension.';
     cookieHintEl.style.display = 'block';
   } else {
     cookieHintEl.textContent = '';
@@ -674,7 +694,7 @@ function openRetryModal(downloadId) {
   jsRuntimeCheckbox.checked = isYoutubeJsIssue;
   jsRuntimeValueEl.disabled = !isYoutubeJsIssue;
   if (isYoutubeJsIssue) {
-    jsRuntimeValueEl.value = 'nodejs';
+    jsRuntimeValueEl.value = 'node';
   }
   
   // Auto-suggest extractor args for YouTube nsig issues

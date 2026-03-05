@@ -878,3 +878,24 @@ header h1 {
   border-left: 3px solid #ffc107;
   display: none;
 }
+
+/* ===== COOKIE TIPS ===== */
+.cookie-tips {
+  font-size: 13px;
+  color: #495057;
+  background: #e8f4fd;
+  padding: 12px 14px;
+  border-radius: 8px;
+  margin: 8px 0 12px 0;
+  border-left: 4px solid #667eea;
+  line-height: 1.6;
+}
+
+.cookie-tips strong {
+  color: #333;
+}
+
+.cookie-tips ol {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}

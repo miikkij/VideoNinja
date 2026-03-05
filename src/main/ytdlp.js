@@ -19,7 +19,7 @@ async function detectJsRuntimes() {
     const { stdout } = await execAsync(cmd, { timeout: 3000 });
     const nodePath = stdout.trim().split('\n')[0].trim();
     if (nodePath) {
-      runtimes.push({ name: 'nodejs', path: nodePath });
+      runtimes.push({ name: 'node', path: nodePath });
     }
   } catch (e) { /* not found */ }
   
@@ -151,11 +151,13 @@ async function downloadVideo(url, outputPath, options = {}, progressCallback = n
     args.push('--sub-lang', options.subtitleLang || 'en');
   }
   
-  // === COOKIE / AUTH OPTIONS ===
-  if (options.cookiesFromBrowser) {
-    args.push('--cookies-from-browser', options.cookiesFromBrowser);
-  } else if (options.cookieFile) {
-    args.push('--cookies', options.cookieFile);
+  // === COOKIE / AUTH OPTIONS (skip if retrying without cookies) ===
+  if (!options._skipCookies) {
+    if (options.cookiesFromBrowser) {
+      args.push('--cookies-from-browser', options.cookiesFromBrowser);
+    } else if (options.cookieFile) {
+      args.push('--cookies', options.cookieFile);
+    }
   }
   
   // === CUSTOM USER-AGENT ===
@@ -178,13 +180,15 @@ async function downloadVideo(url, outputPath, options = {}, progressCallback = n
     args.push('--extractor-args', options.extractorArgs);
   }
   
-  // === JS RUNTIME (required for YouTube on modern yt-dlp) ===
-  if (options.jsRuntime) {
-    args.push('--js-runtimes', options.jsRuntime);
-  } else if (cachedRuntimes && cachedRuntimes.length > 0) {
-    // Auto-detect: prefer nodejs since it's most commonly available
-    const preferred = cachedRuntimes.find(r => r.name === 'nodejs') || cachedRuntimes[0];
-    args.push('--js-runtimes', preferred.name);
+  // === JS RUNTIME (only for YouTube, where it's actually needed) ===
+  const isYouTube = /youtu\.?be/i.test(url);
+  if (isYouTube) {
+    if (options.jsRuntime) {
+      args.push('--js-runtimes', options.jsRuntime);
+    } else if (cachedRuntimes && cachedRuntimes.length > 0) {
+      const preferred = cachedRuntimes.find(r => r.name === 'node') || cachedRuntimes[0];
+      args.push('--js-runtimes', preferred.name);
+    }
   }
   
   // === EXTRA RAW ARGUMENTS ===
@@ -259,7 +263,7 @@ async function downloadVideo(url, outputPath, options = {}, progressCallback = n
       }
     });
     
-    process.on('close', (code) => {
+    process.on('close', async (code) => {
       if (code === 0) {
         console.log('Download completed successfully');
         if (progressCallback) {
@@ -275,6 +279,32 @@ async function downloadVideo(url, outputPath, options = {}, progressCallback = n
           error: null
         });
       } else {
+        // Check if this is a cookie-related error and we can auto-retry without cookies
+        const isCookieError = /could not copy.*cookie|cookie.*database|cookie.*locked|permission.*cookie/i.test(errorOutput);
+        const hasCookieOption = (options.cookiesFromBrowser || options.cookieFile) && !options._skipCookies;
+        
+        if (isCookieError && hasCookieOption) {
+          console.log('Cookie error detected, auto-retrying without cookies...');
+          if (progressCallback) {
+            progressCallback({
+              type: 'progress',
+              percent: 0,
+              status: 'Retrying without cookies...'
+            });
+          }
+          try {
+            const retryResult = await downloadVideo(url, outputPath, { ...options, _skipCookies: true }, progressCallback);
+            resolve(retryResult);
+          } catch (retryError) {
+            resolve({
+              success: false,
+              filepath: null,
+              error: retryError.message
+            });
+          }
+          return;
+        }
+        
         console.error('Download failed with code:', code);
         if (progressCallback) {
           progressCallback({

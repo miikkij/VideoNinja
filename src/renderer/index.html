@@ -80,30 +80,30 @@
 
       <hr class="settings-divider">
       <h3>🍪 Cookie / Authentication</h3>
-      <p class="settings-hint">Required for Instagram, age-restricted YouTube, and login-protected content.<br>
-        <strong>⚠️ Firefox recommended!</strong> Chrome/Edge cookies often fail on Windows due to DPAPI encryption.
-        Use Firefox or export cookies to a Netscape file with a browser extension.</p>
+      <p class="settings-hint">Required for Instagram, age-restricted YouTube, and login-protected content.</p>
       
       <div class="setting-item">
         <label>Cookie Source:</label>
         <select id="cookie-source" class="select">
           <option value="">None (no cookies)</option>
-          <option value="chrome">Chrome</option>
-          <option value="firefox">Firefox</option>
-          <option value="edge">Edge</option>
+          <option value="file">Cookie File (most reliable ✅)</option>
+          <option value="chrome">Chrome (close Chrome first!)</option>
+          <option value="edge">Edge (close Edge first!)</option>
           <option value="brave">Brave</option>
+          <option value="firefox">Firefox</option>
           <option value="opera">Opera</option>
           <option value="safari">Safari</option>
           <option value="chromium">Chromium</option>
           <option value="vivaldi">Vivaldi</option>
-          <option value="file">Cookie File (Netscape format)</option>
         </select>
       </div>
+      
+      <div class="cookie-tips" id="cookie-tips" style="display: none;"></div>
       
       <div class="setting-item" id="cookie-file-setting" style="display: none;">
         <label>Cookie File:</label>
         <div class="input-with-button">
-          <input type="text" id="cookie-file-path" readonly class="input-readonly" placeholder="Select a Netscape cookie file...">
+          <input type="text" id="cookie-file-path" readonly class="input-readonly" placeholder="Select exported cookies.txt file...">
           <button id="choose-cookie-file-btn" class="btn btn-secondary">📄 Choose</button>
         </div>
       </div>
@@ -116,9 +116,10 @@
         <div class="js-runtime-status" id="js-runtime-status">Detecting...</div>
         <select id="js-runtime-select" class="select">
           <option value="auto">Auto-detect (recommended)</option>
-          <option value="nodejs">Node.js</option>
+          <option value="node">Node.js</option>
           <option value="deno">Deno</option>
           <option value="bun">Bun</option>
+          <option value="quickjs">QuickJS</option>
         </select>
         <span class="settings-hint">Required for YouTube. yt-dlp needs a JS runtime to decode YouTube's player.</span>
       </div>
@@ -220,10 +221,10 @@
               <input type="checkbox" id="retry-use-cookies" checked>
               <span>Use browser cookies</span>
               <select id="retry-cookie-browser" class="select select-small">
-                <option value="firefox">Firefox (recommended)</option>
-                <option value="chrome">Chrome</option>
-                <option value="edge">Edge</option>
+                <option value="chrome">Chrome (close it first!)</option>
+                <option value="edge">Edge (close it first!)</option>
                 <option value="brave">Brave</option>
+                <option value="firefox">Firefox</option>
                 <option value="opera">Opera</option>
                 <option value="safari">Safari</option>
               </select>
@@ -255,9 +256,10 @@
               <input type="checkbox" id="retry-js-runtime">
               <span>JS Runtime</span>
               <select id="retry-js-runtime-value" class="select select-small" disabled>
-                <option value="nodejs">Node.js</option>
+                <option value="node">Node.js</option>
                 <option value="deno">Deno</option>
                 <option value="bun">Bun</option>
+                <option value="quickjs">QuickJS</option>
               </select>
             </label>
             <label class="strategy-option">
