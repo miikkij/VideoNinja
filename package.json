@@ -1,7 +1,7 @@
 {
   "name": "video-ninja",
   "version": "1.0.0",
-  "description": "YouTube video downloader using yt-dlp",
+  "description": "A beautiful, user-friendly video downloader built with Electron and yt-dlp",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
@@ -11,7 +11,11 @@
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "build:all": "electron-builder --mac --win",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write \"src/**/*.{js,css,html}\"",
+    "test": "vitest run"
   },
   "keywords": [
     "youtube",
@@ -27,10 +31,16 @@
     "electron-store": "^11.0.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "electron": "^39.2.0",
     "electron-builder": "^26.0.12",
+    "eslint": "^10.0.2",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.4.0",
+    "prettier": "^3.8.1",
     "rimraf": "^6.1.0",
-    "sharp": "^0.33.5"
+    "sharp": "^0.33.5",
+    "vitest": "^4.0.18"
   },
   "build": {
     "appId": "com.videoninja.app",

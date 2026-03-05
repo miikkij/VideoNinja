@@ -1,14 +1,15 @@
 const EventEmitter = require('events');
 const path = require('path');
-const { downloadVideo } = require('./ytdlp');
+const ytdlp = require('./ytdlp');
 
 /**
  * Download Queue Manager
  * Manages video download queue and processes one download at a time
  */
 class DownloadQueue extends EventEmitter {
-  constructor() {
+  constructor(deps = {}) {
     super();
+    this._downloadVideo = deps.downloadVideo || ytdlp.downloadVideo;
     this.queue = [];
     this.history = [];
     this.currentDownload = null;
@@ -66,7 +67,7 @@ class DownloadQueue extends EventEmitter {
     this.emit('queue-updated', this.getQueueState());
 
     try {
-      const result = await downloadVideo(
+      const result = await this._downloadVideo(
         download.url,
         download.outputPath,
         download.options,

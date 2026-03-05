@@ -1,0 +1,8 @@
+# Default owner for everything
+* @VideoNinja
+
+# Frontend
+/src/renderer/ @VideoNinja
+
+# Backend
+/src/main/ @VideoNinja

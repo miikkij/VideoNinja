@@ -32,12 +32,10 @@ jobs:
       - name: Build for macOS
         if: matrix.os == 'macos-latest'
         run: pnpm build:mac
-        continue-on-error: true
       
       - name: Build for Windows
         if: matrix.os == 'windows-latest'
         run: pnpm build:win
-        continue-on-error: true
       
       - name: Upload artifacts
         if: always()

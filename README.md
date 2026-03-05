@@ -1,5 +1,10 @@
 # 🎬 VideoNinja
 
+[![CI](https://github.com/user/VideoNinja/actions/workflows/ci.yml/badge.svg)](https://github.com/user/VideoNinja/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue.svg)]()
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 **VideoNinja** is a beautiful, user-friendly YouTube video downloader built with Electron. It uses **yt-dlp** to download videos in various qualities with an intuitive interface and smart queue management.
 
 ## ✨ Features
@@ -114,8 +119,6 @@ VideoNinja/
 
 ## 🗺️ Roadmap
 
-See [MEGATODOLIST.md](MEGATODOLIST.md) for the complete development roadmap.
-
 ### Phase 1 - Core Foundation ✅
 - [x] Project cleanup
 - [x] yt-dlp integration
@@ -142,15 +145,15 @@ See [MEGATODOLIST.md](MEGATODOLIST.md) for the complete development roadmap.
 
 ## 🤝 Contributing
 
-This is a personal project, but suggestions and bug reports are welcome!
+Contributions are welcome! Please read the [Contributing Guide](CONTRIBUTING.md) before submitting a pull request.
 
 ## 📄 License
 
-MIT License - Feel free to use and modify!
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 ## ⚠️ Disclaimer
 
-This tool is for downloading videos you have the right to download. Please respect copyright laws and YouTube's Terms of Service.
+**VideoNinja is intended for downloading videos you have the legal right to download.** Users are solely responsible for ensuring their use of this tool complies with applicable laws, including copyright law and the terms of service of any platform they access. The developers of VideoNinja assume no liability for misuse.
 
 ---
 
