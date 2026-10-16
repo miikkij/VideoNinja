@@ -110,6 +110,16 @@ require(${JSON.stringify(path.join(root, 'src/main/index.js'))});
 );
 const env = { ...process.env, VIDEONINJA_USER_DATA: profile, VIDEONINJA_HEADLESS: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
+async function removeTemporary() {
+  // Verify that cleanup stays within this invocation's exact temporary tree.
+  const resolved = path.resolve(temporary);
+  if (
+    path.dirname(resolved) !== path.resolve(os.tmpdir()) ||
+    !path.basename(resolved).startsWith('videoninja-screenshots-')
+  )
+    throw new Error('Refusing to remove an unexpected screenshot directory.');
+  await fs.rm(resolved, { recursive: true, force: true });
+}
 let application;
 try {
   application = await electron.launch({
@@ -137,6 +147,7 @@ try {
   await page.waitForFunction(
     () => document.querySelector('[data-id="sound"] progress')?.value === 34,
   );
+  await page.waitForFunction(() => document.querySelectorAll('.personality-toast').length === 0);
 
   async function fitPanel(selector) {
     const height = await page
@@ -165,6 +176,28 @@ try {
   await page.evaluate(() => window.scrollTo(0, 0));
   await fitPanel('.download-panel');
   await capture('overview-en.png');
+  await page.locator('#camera-icon').click();
+  await page.evaluate(() => {
+    // Select an original quote deterministically inside this isolated screenshot fixture.
+    const random = Math.random;
+    Math.random = () => 0;
+    try {
+      document.querySelector('#ninja-icon').click();
+    } finally {
+      Math.random = random;
+    }
+  });
+  assert.deepEqual(errors, []);
+  assert.equal(
+    await page.locator('[data-kind="ninja"] .personality-message').textContent(),
+    'UNGALABUNGALA!',
+  );
+  assert.equal(
+    await page.locator('[data-kind="camera"] .personality-message').textContent(),
+    'FLASH!',
+  );
+  await capture('personality-en.png');
+  await page.waitForFunction(() => document.querySelectorAll('.personality-toast').length === 0);
   await page.locator('.section-nav a[href="#queue-heading"]').click();
   await fitPanel('section[aria-labelledby="queue-heading"]');
   await page.evaluate(() => document.activeElement.blur());
@@ -195,9 +228,8 @@ try {
   await fitPanel('.download-panel');
   await capture('overview-dark-fi.png');
   assert.deepEqual(errors, []);
-  console.log('Captured five actual Electron views with isolated sample data in docs/screenshots.');
+  console.log('Captured six actual Electron views with isolated sample data in docs/screenshots.');
 } finally {
   if (application) await application.close();
-  // This temporary tree was created exclusively by this script.
-  await fs.rm(temporary, { recursive: true, force: true });
+  await removeTemporary();
 }

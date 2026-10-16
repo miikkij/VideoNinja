@@ -31,12 +31,23 @@ then follow the released version's
 
 ## Screenshots
 
-The actual VideoNinja interface on Windows, shown with isolated sample data.
+The actual VideoNinja 1.2 development interface on Windows, shown with isolated sample data.
 Click an image to open it at full size.
 
 **Paste links, choose a quality and start downloading.**
 
 [![VideoNinja main window in English with video links, quality selection and playlist controls](docs/screenshots/overview-en.png)](docs/screenshots/overview-en.png)
+
+<details>
+<summary>Ninja wisdom and a camera flash</summary>
+
+Click the ninja for a random saying or the camera for a brief flash. The original
+210 English quotes are back, with Finnish counterparts and playful queue/download
+messages. These short messages leave actionable errors visible.
+
+[![VideoNinja camera and ninja buttons with FLASH! and UNGALABUNGALA! messages](docs/screenshots/personality-en.png)](docs/screenshots/personality-en.png)
+
+</details>
 
 <details>
 <summary>Parallel downloads and queue controls</summary>
@@ -54,7 +65,7 @@ individual jobs while other downloads continue.
 Inspect the playlist before adding jobs. Select only the videos you want;
 unavailable entries stay visible and cannot be selected.
 
-[![Playlist preview with three selected videos, an unselected video and one unavailable entry](docs/screenshots/playlist-en.png)](docs/screenshots/playlist-en.png)
+[![Playlist preview with three selected videos, an unselected video, search and page controls](docs/screenshots/playlist-en.png)](docs/screenshots/playlist-en.png)
 
 </details>
 
@@ -87,6 +98,8 @@ set the maximum number of simultaneous downloads.
 ## Features
 
 - English/Finnish interface, keyboard controls and light, dark or system theme.
+- Ninja wisdom, a camera flash and playful download messages, with all 210 original
+  English quotes and matching Finnish translations.
 - Up to 100 links per ordinary batch, 500 queued jobs and 1–5 concurrent downloads.
 - Individual and selected-job pause, resume, cancellation and reordering.
 - Playlist previews with search, range selection and pages beyond the first 500 entries.

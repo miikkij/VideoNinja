@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const html = readFileSync(resolve('src/renderer/index.html'), 'utf8');
 const translations = readFileSync(resolve('src/renderer/i18n.js'), 'utf8');
+const personalityQuotes = readFileSync(resolve('src/renderer/personality-quotes.js'), 'utf8');
 const application = readFileSync(resolve('src/renderer/app.js'), 'utf8');
 const $ = (id) => document.getElementById(id);
 const ok = (data) => ({ ok: true, data });
@@ -81,6 +82,7 @@ async function boot(overrides = {}) {
     'onTools',
     'onWarnings',
     'onAppUpdate',
+    'onDownloadEvent',
   ]) {
     api[name] = vi.fn((callback) => {
       events[name] = callback;
@@ -92,6 +94,10 @@ async function boot(overrides = {}) {
     value: { writeText: vi.fn(async () => {}) },
   });
   window.videoNinja = api;
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn(() => ({ matches: false })),
+  });
   // jsdom has no top layer; native Electron dialog behavior is checked by the app smoke suite.
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute('open', '');
@@ -100,6 +106,7 @@ async function boot(overrides = {}) {
     this.removeAttribute('open');
   };
   window.eval(translations);
+  window.eval(personalityQuotes);
   window.eval(application);
   await vi.waitFor(() => expect($('loading').hidden).toBe(true));
   return { api, events, state };
@@ -107,10 +114,101 @@ async function boot(overrides = {}) {
 
 afterEach(() => {
   window.dispatchEvent(new Event('pagehide'));
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe('production renderer', () => {
+  it('restores ninja quotes in the selected language without replacing important notices', async () => {
+    const { api } = await boot();
+    const english = window.VideoNinjaQuotes.en.ninja;
+    const finnish = window.VideoNinjaQuotes.fi.ninja;
+    const quoteIndex = english.findIndex((quote, index) => quote !== finnish[index]);
+    vi.spyOn(Math, 'random').mockReturnValue((quoteIndex + 0.1) / english.length);
+    api.hideWindow.mockResolvedValue({ ok: false, error: { code: 'TRAY_UNAVAILABLE' } });
+    $('hide-window').click();
+    await vi.waitFor(() => expect($('notice').hidden).toBe(false));
+    const importantNotice = $('notice-message').textContent;
+    const ninja = $('ninja-icon');
+    expect(ninja.tagName).toBe('BUTTON');
+    expect(ninja.type).toBe('button');
+    ninja.focus();
+    ninja.click();
+    let toast = document.querySelector('.personality-toast[data-kind="ninja"]');
+    expect(toast.querySelector('.personality-message').textContent).toBe(english[quoteIndex]);
+    expect(toast.querySelector('strong').textContent.trim()).not.toBe('');
+    expect(document.activeElement).toBe(ninja);
+    $('language').value = 'fi';
+    $('language').dispatchEvent(new Event('change'));
+    expect(toast.querySelector('.personality-message').textContent).toBe(finnish[quoteIndex]);
+    ninja.click();
+    toast = document.querySelectorAll('.personality-toast[data-kind="ninja"]').item(1);
+    expect(finnish).toContain(toast.querySelector('.personality-message').textContent);
+    expect($('notice-message').textContent).toBe(importantNotice);
+    expect($('notice').hidden).toBe(false);
+    expect($('personality-toasts').querySelector('img,script')).toBeNull();
+  });
+
+  it('bounds transient personality messages, expires them and disposes their timers on pagehide', async () => {
+    await boot();
+    vi.useFakeTimers();
+    for (let index = 0; index < 5; index++) $('ninja-icon').click();
+    expect($('personality-toasts').children).toHaveLength(3);
+    vi.advanceTimersByTime(3000);
+    expect($('personality-toasts').children).toHaveLength(0);
+    $('ninja-icon').click();
+    $('camera-icon').click();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(vi.getTimerCount()).toBe(0);
+    expect($('personality-toasts').children).toHaveLength(0);
+    expect($('camera-icon').classList.contains('camera-flash')).toBe(false);
+    $('ninja-icon').click();
+    expect($('personality-toasts').children).toHaveLength(0);
+  });
+
+  it('flashes the camera briefly and respects reduced motion while retaining its message', async () => {
+    await boot();
+    vi.useFakeTimers();
+    const camera = $('camera-icon');
+    expect(camera.tagName).toBe('BUTTON');
+    camera.click();
+    expect(camera.classList.contains('camera-flash')).toBe(true);
+    expect(document.querySelectorAll('.personality-toast[data-kind="camera"]')).toHaveLength(1);
+    vi.advanceTimersByTime(100);
+    expect(camera.classList.contains('camera-flash')).toBe(false);
+    window.matchMedia.mockReturnValue({ matches: true });
+    camera.click();
+    expect(camera.classList.contains('camera-flash')).toBe(false);
+    expect(document.querySelectorAll('.personality-toast[data-kind="camera"]')).toHaveLength(2);
+  });
+
+  it('shows lifecycle quotes only for explicit download events, never state or progress replay', async () => {
+    const { events } = await boot({
+      queue: {
+        queue: [job('active', 'downloading'), job('waiting')],
+        history: [job('done', 'completed'), job('old-failure', 'failed')],
+      },
+    });
+    expect($('personality-toasts').children).toHaveLength(0);
+    for (const type of ['started', 'completed', 'failed']) {
+      events.onDownloadEvent({ type });
+      const toast = document.querySelector(`.personality-toast[data-kind="${type}"]`);
+      expect(window.VideoNinjaQuotes.en[type]).toContain(
+        toast.querySelector('.personality-message').textContent,
+      );
+    }
+    const displayed = [...$('personality-toasts').children];
+    events.onState({
+      queue: [job('active', 'paused')],
+      history: [job('waiting', 'completed'), job('failed', 'failed'), job('skipped', 'skipped')],
+    });
+    events.onProgress({ id: 'active', progress: 42, phase: 'downloading' });
+    for (const type of ['paused', 'cancelled', 'skipped', '<img src=x>'])
+      events.onDownloadEvent({ type });
+    expect([...$('personality-toasts').children]).toEqual(displayed);
+  });
+
   it('shows first-run settings and enables adding only after a selected folder is saved', async () => {
     const { api } = await boot({ settings: { language: 'en' } });
     expect($('settings-panel').hidden).toBe(false);
@@ -172,9 +270,11 @@ describe('production renderer', () => {
     );
     expect($('video-urls').value).toBe(text);
     expect($('notice').hidden).toBe(true);
+    expect(document.querySelectorAll('.personality-toast[data-kind="queued"]')).toHaveLength(0);
     resolve(ok(['one', 'two']));
     await vi.waitFor(() => expect($('video-urls').value).toBe(''));
     expect($('notice-message').textContent).toContain('2');
+    expect(document.querySelectorAll('.personality-toast[data-kind="queued"]')).toHaveLength(1);
   });
 
   it('rejects malformed protocols and retains failed submissions with a persistent accessible error', async () => {
@@ -193,6 +293,7 @@ describe('production renderer', () => {
     await vi.waitFor(() => expect($('urls-error').textContent).toContain('not writable'));
     expect($('video-urls').value).toBe('https://example.com/video');
     expect($('notice').hidden).toBe(true);
+    expect(document.querySelectorAll('.personality-toast')).toHaveLength(0);
   });
 
   it('renders hostile titles, URLs, metadata and errors as plain text', async () => {
@@ -553,6 +654,7 @@ describe('production renderer', () => {
     });
     expect(api.addDownloads).not.toHaveBeenCalled();
     expect(api.addPlaylistSelection).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('.personality-toast[data-kind="queued"]')).toHaveLength(0);
     expect($('playlist-add-selected').disabled).toBe(true);
     expect($('playlist-dialog').querySelector('img, script')).toBeNull();
     expect(document.querySelector('#playlist-list input[data-index="2"]').disabled).toBe(true);
@@ -575,6 +677,7 @@ describe('production renderer', () => {
     await vi.waitFor(() => expect($('playlist-dialog').open).toBe(false));
     expect(api.cancelPlaylistPreview).not.toHaveBeenCalled();
     expect($('notice-message').textContent).toContain('1');
+    expect(document.querySelectorAll('.personality-toast[data-kind="queued"]')).toHaveLength(1);
     expect(document.activeElement).toBe($('playlist-preview-button'));
   });
 

@@ -206,10 +206,52 @@ h3 {
 .brand {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.8rem;
 }
 .brand-icon {
   font-size: 2.4rem;
+  flex: 0 0 auto;
+  padding: 0.2rem;
+  color: white;
+  background: transparent;
+  border-color: transparent;
+}
+.brand-icon:hover:not(:disabled) {
+  background: rgb(255 255 255 / 15%);
+  border-color: rgb(255 255 255 / 50%);
+}
+.brand-icon:focus-visible {
+  outline-color: white;
+}
+.camera-flash {
+  filter: brightness(3) saturate(2);
+}
+.personality-toasts {
+  position: fixed;
+  inset-inline-end: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  display: grid;
+  gap: 0.5rem;
+  width: min(23rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+.personality-toast {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-inline-start: 4px solid var(--accent);
+  border-radius: 0.8rem;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0.3rem 1.2rem rgb(0 0 0 / 20%);
+  overflow-wrap: anywhere;
+}
+.personality-toast[data-kind='failed'] {
+  border-inline-start-color: var(--danger);
+}
+.personality-message {
+  margin-top: 0.25rem;
 }
 .brand p {
   margin-top: 0.35rem;
@@ -724,6 +766,9 @@ dialog::backdrop {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .camera-flash {
+    filter: none;
+  }
   *,
   *::before,
   *::after {

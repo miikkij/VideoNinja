@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import path from 'node:path';
 import DownloadQueue from '../../src/main/downloadQueue.js';
 import updates from '../../src/main/appUpdater.js';
+import personality from '../../src/main/personalityEvents.js';
 
 const require = createRequire(import.meta.url);
 const indexPath = path.resolve('src/main/index.js');
@@ -98,6 +99,7 @@ async function fixture(env = {}, nativeUpdater = null) {
     './startup': { createStartup: () => ({ isEnabled: async () => false }) },
     './privateStore': { createPrivateStore: (store) => store },
     './notifications': { createNotifications: () => ({ record() {}, dispose() {} }) },
+    './personalityEvents': personality,
     './appUpdater': {
       createAppUpdater(options) {
         updaterOptions = options;

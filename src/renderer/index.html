@@ -10,6 +10,7 @@
     <title>VideoNinja</title>
     <link rel="stylesheet" href="styles.css" />
     <script src="i18n.js" defer></script>
+    <script src="personality-quotes.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
@@ -17,11 +18,32 @@
     <div class="app-shell">
       <header class="app-header">
         <div class="brand">
-          <span class="brand-icon" aria-hidden="true">🥷</span>
+          <button
+            type="button"
+            id="camera-icon"
+            class="brand-icon"
+            data-i18n-aria-label="cameraButton"
+            data-i18n-title="cameraButton"
+            aria-label="Click the camera for a flash"
+            title="Click the camera for a flash"
+          >
+            🎬
+          </button>
           <div>
             <h1>VideoNinja <span id="app-version" class="version"></span></h1>
             <p data-i18n="tagline">Your videos, ready when you are.</p>
           </div>
+          <button
+            type="button"
+            id="ninja-icon"
+            class="brand-icon"
+            data-i18n-aria-label="ninjaButton"
+            data-i18n-title="ninjaButton"
+            aria-label="Click the ninja for ninja wisdom"
+            title="Click the ninja for ninja wisdom"
+          >
+            🥷
+          </button>
         </div>
         <div class="header-actions">
           <div class="language-field">
@@ -50,6 +72,15 @@
           </button>
         </div>
       </header>
+      <div
+        id="personality-toasts"
+        class="personality-toasts"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        data-i18n-aria-label="personalityMessages"
+        aria-label="Ninja messages"
+      ></div>
       <nav class="section-nav" aria-labelledby="navigation-title">
         <h2 id="navigation-title" class="sr-only" data-i18n="sections">Sections</h2>
         <a href="#download-heading" data-i18n="addVideos">Download videos</a>

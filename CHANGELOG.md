@@ -46,6 +46,16 @@ been published.
 See the [20-item implementation and verification record](docs/DEVELOPMENT_PLAN.md)
 for defaults and remaining environment/release checks.
 
+### Fixed
+
+- Restored all 210 original English ninja/queue/download quotes in their original
+  order, with matching Finnish translations.
+- Restored the clickable ninja, the camera's 100 ms flash and playful queued,
+  started, completed and failed download messages without replacing actionable errors.
+  The flash respects reduced-motion preferences.
+- Refreshed the five existing screenshots and added a real-interface personality
+  screenshot captured with isolated sample data.
+
 ## [1.1.0] - 2026-10-16
 
 ### Added

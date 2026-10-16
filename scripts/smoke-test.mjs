@@ -108,6 +108,53 @@ try {
   );
   assert.equal(arbitraryFolder.ok, false);
 
+  // Header interactions remain keyboard operable and cannot dismiss an error.
+  await page.locator('#hide-window').click();
+  await page.waitForFunction(() =>
+    document.querySelector('#notice')?.classList.contains('is-error'),
+  );
+  const importantNotice = await page.locator('#notice-message').textContent();
+  const ninja = page.locator('#ninja-icon');
+  await ninja.press('Enter');
+  await page.locator('.personality-toast[data-kind="ninja"]').waitFor();
+  assert.equal(await page.locator('.personality-toast[data-kind="ninja"]').count(), 1);
+  assert.equal(await ninja.evaluate((button) => button === document.activeElement), true);
+  await ninja.press('Space');
+  assert.equal(await page.locator('.personality-toast[data-kind="ninja"]').count(), 2);
+  assert.equal(
+    await page.evaluate(() =>
+      window.VideoNinjaQuotes.en.ninja.includes(
+        document.querySelector('.personality-toast[data-kind="ninja"] .personality-message')
+          .textContent,
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    await page.locator('#camera-icon').evaluate((button) => {
+      button.click();
+      return button.classList.contains('camera-flash');
+    }),
+    true,
+  );
+  await page.waitForFunction(
+    () => !document.querySelector('#camera-icon').classList.contains('camera-flash'),
+  );
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(
+    await page.locator('#camera-icon').evaluate((button) => {
+      button.click();
+      return button.classList.contains('camera-flash');
+    }),
+    false,
+  );
+  assert.equal(await page.locator('.personality-toast').count(), 3);
+  assert.equal(await page.locator('.personality-toast[data-kind="camera"]').count(), 2);
+  assert.equal(await page.locator('#notice-message').textContent(), importantNotice);
+  assert.equal(await page.locator('#notice').isVisible(), true);
+  await page.locator('#dismiss-notice').click();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
   const second = spawn(executablePath, packaged || installedExecutable ? [] : [root], {
     env: environment,
@@ -424,6 +471,23 @@ try {
     'No horizontal scrolling at 200% zoom.',
   );
   await screenshot(`${mode}-fi-200.png`, page);
+  await page.locator('#ninja-icon').press('Enter');
+  await page.locator('.personality-toast[data-kind="ninja"]').waitFor();
+  assert.equal(
+    await page.evaluate(() =>
+      window.VideoNinjaQuotes.fi.ninja.includes(
+        document.querySelector('.personality-toast[data-kind="ninja"] .personality-message')
+          .textContent,
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+    true,
+    'Personality messages fit at 200% zoom.',
+  );
+  await screenshot(mode === 'source' ? 'personality.png' : `${mode}-personality.png`, page);
   await close();
   const saved = JSON.parse(await fs.readFile(configFile, 'utf8'));
   assert.equal(saved.queueState.queue.length, 500);
@@ -444,7 +508,7 @@ try {
   await close();
   assert.deepEqual(errors, [], 'Renderer has no uncaught errors.');
   console.log(
-    `${mode} Electron smoke passed: sandbox, setup, IPC, languages, 500 queued jobs, 100 history entries, fresh initial snapshots, awaited tool/download shutdown, focus, reload, persistence and 200% layout.`,
+    `${mode} Electron smoke passed: sandbox, setup, IPC, languages, 500 queued jobs, 100 history entries, fresh initial snapshots, awaited tool/download shutdown, focus, reload, persistence, keyboard personality interactions, reduced motion and 200% layout.`,
   );
 } finally {
   await close();

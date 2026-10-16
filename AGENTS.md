@@ -8,3 +8,6 @@ explicitly requests one. Preserve unrelated changes and never force-push.
 Use pnpm and the Node version in `.nvmrc`. Keep documentation current and verify
 the pushed commit's CI result. Tags and public releases follow the owner's
 release instructions; a source update alone does not request a release.
+
+The existing ninja personality, quotes and playful interactions are product
+features. Preserve them unless the owner explicitly requests their removal.

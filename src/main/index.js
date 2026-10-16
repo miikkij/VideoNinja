@@ -22,6 +22,7 @@ const { createHandlers, registerIpc, APP_URL } = require('./ipc');
 const { createStartup } = require('./startup');
 const { createPrivateStore } = require('./privateStore');
 const { createNotifications } = require('./notifications');
+const { createPersonalityEvents } = require('./personalityEvents');
 const { createAppUpdater } = require('./appUpdater');
 const { createToolManager } = require('./toolManager');
 const {
@@ -57,6 +58,10 @@ const assets = new Map([
   ['/index.html', ['../renderer/index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['../renderer/app.js', 'text/javascript; charset=utf-8']],
   ['/i18n.js', ['../renderer/i18n.js', 'text/javascript; charset=utf-8']],
+  [
+    '/personality-quotes.js',
+    ['../renderer/personality-quotes.js', 'text/javascript; charset=utf-8'],
+  ],
   ['/styles.css', ['../renderer/styles.css', 'text/css; charset=utf-8']],
   ['/assets/icons/icon.png', ['../assets/icons/icon.png', 'image/png']],
 ]);
@@ -72,6 +77,7 @@ let services;
 let toolManager;
 let appUpdater;
 let notifications;
+let personalityEvents;
 let updateTimer;
 let diskTimer;
 let toolCheck;
@@ -370,6 +376,10 @@ async function initialize() {
   queue.on('download-progress', (value) => send('progress', value));
   queue.on('download-completed', (job) => notifications.record('completed', job));
   queue.on('download-failed', (job) => notifications.record('failed', job));
+  personalityEvents = createPersonalityEvents({
+    queue,
+    onEvent: (value) => send('download-event', value),
+  });
   if (!silent) {
     try {
       tray = new Tray(nativeImage.createFromPath(ICONS['icon-normal']));
@@ -423,6 +433,7 @@ if (!app.requestSingleInstanceLock()) {
     clearInterval(diskTimer);
     clearTimeout(updateTimer);
     notifications?.dispose();
+    personalityEvents?.dispose();
     const stoppingUpdater = appUpdater?.dispose();
     const pendingToolCheck = toolCheck;
     toolController?.abort();

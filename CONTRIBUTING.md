@@ -247,8 +247,9 @@ node scripts/capture-screenshots.mjs
 The script launches real Electron with an isolated temporary profile and sample
 tool/playlist/progress data. It captures the unmodified interface into
 `docs/screenshots/`; it does not access the normal profile or download media.
-Review all five images, including the Finnish dark theme, before committing them. On headless Linux, use the same
-display and sandbox setup as the Electron smoke test.
+Review all six images, including the Finnish dark theme and the ninja/camera
+interactions, before committing them. On headless Linux, use the same display and
+sandbox setup as the Electron smoke test.
 
 ```sh
 node scripts/generate-icons.js

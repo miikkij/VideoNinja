@@ -7,6 +7,9 @@
   const listeners = new AbortController();
   const subscriptions = [];
   const rows = new Map();
+  const personalityToasts = new Map();
+  const lastQuote = new Map();
+  let cameraTimer;
   let settings = {
     language: 'en',
     quality: 'best',
@@ -91,6 +94,46 @@
     $('notice').classList.toggle('is-error', error);
     $('notice').hidden = false;
     announce(message);
+  }
+  function personalityQuotes(kind) {
+    const language = i18n.locale() === 'fi-FI' ? 'fi' : 'en';
+    return window.VideoNinjaQuotes[language][kind];
+  }
+  function renderPersonality() {
+    for (const [element, toast] of personalityToasts) {
+      element.querySelector('strong').textContent = t(`personality_${toast.kind}`);
+      element.querySelector('.personality-message').textContent =
+        toast.kind === 'camera' ? t('cameraFlash') : personalityQuotes(toast.kind)[toast.index];
+    }
+  }
+  function removePersonality(element) {
+    clearTimeout(personalityToasts.get(element)?.timer);
+    personalityToasts.delete(element);
+    element.remove();
+  }
+  function showPersonality(kind) {
+    let index = 0;
+    if (kind !== 'camera') {
+      const quotes = personalityQuotes(kind);
+      index = Math.floor(Math.random() * quotes.length);
+      if (quotes.length > 1 && index === lastQuote.get(kind)) index = (index + 1) % quotes.length;
+      lastQuote.set(kind, index);
+    }
+    while (personalityToasts.size >= 3) removePersonality(personalityToasts.keys().next().value);
+    const element = document.createElement('div');
+    element.className = 'personality-toast';
+    element.dataset.kind = kind;
+    element.append(document.createElement('strong'));
+    const message = document.createElement('p');
+    message.className = 'personality-message';
+    element.append(message);
+    personalityToasts.set(element, {
+      kind,
+      index,
+      timer: setTimeout(() => removePersonality(element), 3000),
+    });
+    renderPersonality();
+    $('personality-toasts').append(element);
   }
   function warningMessage(item) {
     const key = typeof item === 'string' ? item : item.code;
@@ -268,6 +311,7 @@
   }
   function applySettings() {
     i18n.setLanguage(settings.language);
+    renderPersonality();
     $('language').value = settings.language === 'fi' ? 'fi' : 'en';
     $('max-concurrent').value = String(settings.maxConcurrent || 1);
     $('theme').value = settings.theme || 'auto';
@@ -449,7 +493,9 @@
       const accepted = await request('addDownloads', { urls, options });
       if ($('video-urls').value === submittedText) $('video-urls').value = '';
       $('preview-panel').hidden = true;
-      notice(t('added', { count: Array.isArray(accepted) ? accepted.length : urls.length }));
+      const count = Array.isArray(accepted) ? accepted.length : urls.length;
+      notice(t('added', { count }));
+      if (count) showPersonality('queued');
       $('video-urls').focus();
     } catch (error) {
       formError(error.message);
@@ -1444,7 +1490,9 @@
       });
       playlistAdding = false;
       closePlaylist(false);
-      notice(t('added', { count: Array.isArray(accepted) ? accepted.length : indices.length }));
+      const count = Array.isArray(accepted) ? accepted.length : indices.length;
+      notice(t('added', { count }));
+      if (count) showPersonality('queued');
     } catch (error) {
       $('playlist-error').textContent = error.message;
       $('playlist-error').hidden = false;
@@ -1479,6 +1527,16 @@
     }
   }
 
+  listen($('ninja-icon'), 'click', () => showPersonality('ninja'));
+  listen($('camera-icon'), 'click', () => {
+    clearTimeout(cameraTimer);
+    $('camera-icon').classList.remove('camera-flash');
+    if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      $('camera-icon').classList.add('camera-flash');
+      cameraTimer = setTimeout(() => $('camera-icon').classList.remove('camera-flash'), 100);
+    }
+    showPersonality('camera');
+  });
   listen($('settings-toggle'), 'click', () => openSettings($('settings-panel').hidden));
   listen($('retry-save'), 'click', () =>
     action($('retry-save'), async () => {
@@ -1870,6 +1928,13 @@
     for (const [name, callback] of [
       ['onState', setQueue],
       [
+        'onDownloadEvent',
+        (event) => {
+          if (initialized && ['started', 'completed', 'failed'].includes(event?.type))
+            showPersonality(event.type);
+        },
+      ],
+      [
         'onAppUpdate',
         (state) => {
           appUpdateState = state || { status: 'idle' };
@@ -1926,6 +1991,9 @@
     'pagehide',
     () => {
       listeners.abort();
+      clearTimeout(cameraTimer);
+      $('camera-icon').classList.remove('camera-flash');
+      for (const element of personalityToasts.keys()) removePersonality(element);
       rows.forEach((row) => row.controller.abort());
       subscriptions.forEach((unsubscribe) => {
         if (typeof unsubscribe === 'function') unsubscribe();

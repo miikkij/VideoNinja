@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld(
     openExternal: (url) => invoke('openExternal', url),
     onState: (callback) => subscribe('video-ninja:state', callback),
     onProgress: (callback) => subscribe('video-ninja:progress', callback),
+    onDownloadEvent: (callback) => subscribe('video-ninja:download-event', callback),
     onDiskSpace: (callback) => subscribe('video-ninja:disk-space', callback),
     onTools: (callback) => subscribe('video-ninja:tools', callback),
     onWarnings: (callback) => subscribe('video-ninja:warnings', callback),

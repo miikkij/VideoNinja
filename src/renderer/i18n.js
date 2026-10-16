@@ -762,6 +762,30 @@
     error_PROFILE_LIMIT:
       'Profiilien enimmäismäärä on täynnä. Poista profiili ennen uuden tallentamista.',
   });
+  Object.assign(messages.en, {
+    ninjaButton: 'Click the ninja for ninja wisdom',
+    cameraButton: 'Click the camera for a flash',
+    personalityMessages: 'Ninja messages',
+    personality_ninja: '🥷 Ninja wisdom',
+    personality_camera: '📸',
+    personality_queued: '✅ Added to Queue',
+    personality_started: '🥷 Download Started',
+    personality_completed: '🎊 Download Complete!',
+    personality_failed: '⚠️ Download Failed',
+    cameraFlash: 'FLASH!',
+  });
+  Object.assign(messages.fi, {
+    ninjaButton: 'Klikkaa ninjaa ja kuule ninjaviisaus',
+    cameraButton: 'Klikkaa kameraa ja räpsäytä kuva',
+    personalityMessages: 'Ninjan viestit',
+    personality_ninja: '🥷 Ninjaviisautta',
+    personality_camera: '📸',
+    personality_queued: '✅ Lisätty jonoon',
+    personality_started: '🥷 Lataus alkoi',
+    personality_completed: '🎊 Lataus valmis!',
+    personality_failed: '⚠️ Lataus epäonnistui',
+    cameraFlash: 'RÄPS!',
+  });
   let language = 'en';
   function t(key, values = {}) {
     const message = messages[language][key] ?? messages.en[key] ?? key;
