@@ -1,21 +1,28 @@
 {
   "name": "video-ninja",
-  "version": "1.0.1",
-  "description": "A beautiful, user-friendly video downloader built with Electron and yt-dlp",
+  "version": "1.1.0",
+  "description": "A desktop video download queue built with Electron and yt-dlp",
   "main": "src/main/index.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/start.js",
     "clean": "rimraf dist node_modules/.cache",
-    "prebuild": "pnpm run clean",
-    "build": "electron-builder",
-    "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win",
-    "build:all": "electron-builder --mac --win",
+    "build": "electron-builder --publish never",
+    "build:mac": "electron-builder --mac --publish never",
+    "build:win": "electron-builder --win --publish never",
+    "build:linux": "electron-builder --linux --publish never",
     "postinstall": "electron-builder install-app-deps",
-    "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix",
+    "lint": "eslint src/ scripts/ tests/ *.mjs --max-warnings 0",
+    "lint:fix": "eslint src/ scripts/ tests/ *.mjs --fix",
     "format": "prettier --write \"src/**/*.{js,css,html}\"",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check": "pnpm lint && pnpm test",
+    "audit": "pnpm audit --audit-level high && pnpm audit --prod",
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "test:media": "node scripts/media-smoke.mjs",
+    "release:verify": "node scripts/verify-release.mjs"
+  },
+  "engines": {
+    "node": "^24.15.0 || >=26.0.0"
   },
   "keywords": [
     "youtube",
@@ -25,22 +32,30 @@
     "electron"
   ],
   "author": "VideoNinja",
+  "homepage": "https://github.com/miikkij/VideoNinja",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miikkij/VideoNinja.git"
+  },
   "license": "MIT",
   "dependencies": {
-    "auto-launch": "^5.0.6",
-    "electron-store": "^11.0.2"
+    "electron-store": "^12.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "electron": "^39.2.0",
-    "electron-builder": "^26.0.12",
-    "eslint": "^10.0.2",
+    "electron": "^44.8.0",
+    "electron-builder": "^26.15.3",
+    "electron-builder-squirrel-windows": "26.15.3",
+    "eslint": "^10.13.0",
     "eslint-config-prettier": "^10.1.8",
-    "globals": "^17.4.0",
-    "prettier": "^3.8.1",
-    "rimraf": "^6.1.0",
-    "sharp": "^0.33.5",
-    "vitest": "^4.0.18"
+    "globals": "^17.13.0",
+    "jsdom": "^30.1.3",
+    "playwright": "^1.64.1",
+    "prettier": "^3.9.10",
+    "rimraf": "^6.1.3",
+    "sharp": "^0.35.5",
+    "vite": "^7.3.7",
+    "vitest": "^5.0.5"
   },
   "build": {
     "appId": "com.videoninja.app",
@@ -51,7 +66,7 @@
     },
     "win": {
       "icon": "src/assets/icons/icon.ico",
-      "signAndEditExecutable": false,
+      "signExecutable": false,
       "target": [
         {
           "target": "nsis",
@@ -73,6 +88,15 @@
       "target": [
         "dmg",
         "zip"
+      ]
+    },
+    "linux": {
+      "category": "Utility",
+      "maintainer": "VideoNinja",
+      "icon": "src/assets/icons/icon.png",
+      "target": [
+        "AppImage",
+        "deb"
       ]
     },
     "nsis": {

@@ -1,8 +1,44 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to VideoNinja are recorded here.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
+## [Unreleased] - 1.1.0
+
+### Added
+
+- Selectable English/Finnish interface and a Finnish quick-start guide.
+- Batch URL input, explicit metadata preview, pause/resume and queue reordering.
+- History search, confirmed clearing and privacy-reduced JSON export.
+- Original audio, MP3, M4A, Opus and WAV selection.
+- Linux AppImage/Debian packaging and native three-platform CI.
+- Real Electron source/package smoke tests, local media fixtures and release artifact checks.
+
+### Changed
+
+- Electron 44.8, electron-store 12, electron-builder 26.15.3, Vitest 5 and refreshed dependencies.
+- Node 24.22.0 development baseline and pinned pnpm/Actions versions.
+- Sandboxed renderer, isolated preload API, validated IPC and local-only CSP.
+- Shell-free downloads with allowlisted options, explicit tool paths and supported runtime checks.
+- Durable schema-versioned queue storage, bounded history/errors and corrupt-config quarantine.
+- Accessible keyboard flows, persistent errors, stable progress rows and 200% reflow.
+- Native start-at-login registration replaces auto-launch; tray uses a static busy indicator.
+- README, architecture, troubleshooting, security, contribution and analysis documentation.
+
+### Fixed
+
+- Active cancellation no longer discards the following queued job; shutdown awaits subprocess cleanup.
+- UUID job identifiers avoid same-millisecond collisions.
+- Final files are verified after merging/conversion and safely constrained to the download folder.
+- Correct 2160p/1440p limits and audio-only behavior.
+- First-run setup, tool rechecking, renderer reload, acknowledged submission and settings-save recovery.
+- Actual disk capacity replaces fabricated fallback values.
+- Icon script paths, output sizes and missing/corrupt source failures.
+- Windows executable metadata/icon editing remains enabled without requiring signing.
+
+No public release has been created for this source change. Code signing,
+notarization and an automatic update channel are not configured.
+One moderate build-only dependency advisory remains without a published fix;
+see SECURITY.md.
 
 ## [1.0.1] - 2026-03-05
 

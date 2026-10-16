@@ -1,4 +1,10 @@
 onlyBuiltDependencies:
-  - canvas
   - electron
   - sharp
+ignoredBuiltDependencies:
+  - esbuild
+  - electron-winstaller
+
+# Vite 7.3.7 supports this patched esbuild minor; verify with the full test suite.
+overrides:
+  esbuild: ^0.28.2

@@ -1,525 +1,350 @@
-const { app, BrowserWindow, Tray, Menu, shell, nativeImage, ipcMain, dialog } = require('electron');
-const path = require('path');
-const Store = require('electron-store').default || require('electron-store');
-const { checkYtDlpAvailability, checkFfmpegAvailability, getDiskSpace, formatBytes } = require('./ytdlp');
+const {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  shell,
+  nativeImage,
+  ipcMain,
+  dialog,
+  protocol,
+  net,
+  screen,
+} = require('electron');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const tools = require('./ytdlp');
 const DownloadQueue = require('./downloadQueue');
-const AutoLaunch = require('auto-launch');
+const { createHandlers, registerIpc, APP_URL } = require('./ipc');
+const { createStartup } = require('./startup');
+const {
+  readConfiguration,
+  loadPersistedState,
+  attachQueuePersistence,
+  sanitizeWindowBounds,
+} = require('./persistence');
 
-const store = new Store();
-const downloadQueue = new DownloadQueue();
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'videoninja',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+  },
+]);
 
-// Auto-launch configuration
-const autoLauncher = new AutoLaunch({
-  name: 'VideoNinja',
-  path: app.getPath('exe'),
-});
+// An explicit isolated profile also makes packaged smoke tests safe for user data.
+if (process.env.VIDEONINJA_USER_DATA) {
+  if (!path.isAbsolute(process.env.VIDEONINJA_USER_DATA))
+    throw new Error('The profile path must be absolute.');
+  app.setPath('userData', process.env.VIDEONINJA_USER_DATA);
+}
 
-let tray = null;
+const ICONS = Object.fromEntries(
+  ['icon', 'icon-normal', 'icon-alert'].map((name) => [
+    name,
+    path.join(__dirname, '../assets/icons', name + '.png'),
+  ]),
+);
+const CSP =
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'";
+const assets = new Map([
+  ['/index.html', ['../renderer/index.html', 'text/html; charset=utf-8']],
+  ['/app.js', ['../renderer/app.js', 'text/javascript; charset=utf-8']],
+  ['/i18n.js', ['../renderer/i18n.js', 'text/javascript; charset=utf-8']],
+  ['/styles.css', ['../renderer/styles.css', 'text/css; charset=utf-8']],
+  ['/assets/icons/icon.png', ['../assets/icons/icon.png', 'image/png']],
+]);
+
 let mainWindow = null;
-let animationInterval = null;
-let isAnimating = false;
-let ytdlpAvailable = false;
-let diskSpaceInterval = null;
-
-// Platform-specific icon paths
-const ICONS = {
-  normal: path.join(__dirname, '../assets/icons/icon-normal.png'),
-  alert: path.join(__dirname, '../assets/icons/icon-alert.png'),
-  app: path.join(__dirname, '../assets/icons/icon.png'),
+let tray = null;
+let store;
+let queue;
+let settings;
+let startup;
+let persistence;
+let services;
+let diskTimer;
+let toolCheck;
+let quitting = false;
+let quitAllowed = false;
+let warnings = [];
+let toolState = {
+  ytdlp: { available: false, checking: true, path: null, version: null, jsRuntimes: [] },
+  ffmpeg: { available: false, checking: true, path: null, version: null },
 };
+let diskState = { available: false, total: null, free: null, used: null, error: null };
+const silent = process.env.VIDEONINJA_HEADLESS === '1';
 
-// Simple base64 encoded 16x16 video camera icon as fallback
-const FALLBACK_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAD8SURBVDiNpZKxSsNQFIa/e2/SQhFE6OLg4uDm5OQDuPgAPoCTi6Ogo4uDr+Hm5ODg5uYDuDi4uLg4KIhQpE1yj0OSNk3T2h8u3HP+7z/nP+cKM8YYphGRFWAf2AQ84BF4BU6NMZdN+qrM+Al4BvaAtKa1BqwDW8Ar8DhN2wHegXWgVZPWBs6BDWPMoEndAd6ALWNMWJO2A7wBu8aYcpK2C3wAe8aYapL2E/gE9o0x1STtJ/AJ7BtjxpO0n8AncGCMuZ+k/QJ+AYfGmP4sbRf4Bo6MMf1Z2h5wBxwbY0azTm8f+AaOjTGjhv8icAMcGWPGc7Wd/wN/AO4vTZ5EtF+jAAAAAElFTkSuQmCC';
-const FALLBACK_ICON_ALERT = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAEOSURBVDiNpZKxSsNQGIW/f25SKIIoOLg4uDm5+QAuPoCTo6ODiIOLg6/h5uTg4ObmA7g4uLi4OCiIUKRNcq9DkjZNa9sfLtxz/vN/5/znCjPGGOYRkXVgD9gCPOANeAFOjTFXbfq6zPgJeAZ2ga2WthqwBmwDL8DTNK0DfAAbwFpLWws4BzaMMfdtek7wAWwaY9KWthP4BLaNMUlL2wl8ATvGmGKS5gLfwK4xZjhJ8z6B38CeMWY0SfMOgN/AvjFmPEnzDoBfwIEx5mGS5h0Cv4B9Y8xwluYB18ChMWYwS9sDroFDY8xg1unjA9fAoTGmP+f09oAb4NAY05/zXwRugENjTH+utvd/4A/vMlJRb7FqfwAAAABJRU5ErkJggg==';
-
-// Check if custom icons exist
-const fs = require('fs');
-const usePngIcons = fs.existsSync(ICONS.normal) && fs.existsSync(ICONS.alert);
-
-/**
- * Create system tray icon
- */
-function createTray() {
-  let icon;
-  
-  if (usePngIcons) {
-    icon = nativeImage.createFromPath(ICONS.normal);
-  } else {
-    // Using fallback icons (add your custom icons to src/assets/icons/)
-    icon = nativeImage.createFromDataURL(FALLBACK_ICON);
-  }
-  
-  if (process.platform === 'darwin') {
-    icon = icon.resize({ width: 22, height: 22 });
-  } else {
-    icon = icon.resize({ width: 16, height: 16 });
-  }
-  
-  tray = new Tray(icon);
-  tray.setToolTip('VideoNinja - YouTube Downloader');
-  
-  // Click to show main window
-  tray.on('click', () => {
-    stopAnimation();
-    showMainWindow();
-  });
-  
-  // Right-click for context menu
-  tray.on('right-click', () => {
-    showContextMenu();
-  });
+function send(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send('video-ninja:' + channel, data);
 }
 
-/**
- * Show context menu on tray icon
- */
-function showContextMenu() {
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Open VideoNinja',
-      click: () => {
-        stopAnimation();
-        showMainWindow();
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        app.quit();
-      }
-    }
-  ]);
-  
-  tray.popUpContextMenu(contextMenu);
+function warn(code) {
+  if (!warnings.includes(code)) warnings.push(code);
+  send('warnings', warnings);
 }
 
-/**
- * Show main application window
- */
-async function showMainWindow() {
-  if (mainWindow) {
-    mainWindow.show();
-    mainWindow.focus();
-    return;
-  }
-  
-  // Get saved window position or use defaults
-  const windowBounds = store.get('windowBounds', {
-    width: 800,
-    height: 700,
-    x: undefined,
-    y: undefined
-  });
-  
-  mainWindow = new BrowserWindow({
-    width: windowBounds.width,
-    height: windowBounds.height,
-    x: windowBounds.x,
-    y: windowBounds.y,
-    show: false,
-    frame: false,
-    resizable: true,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
-    },
-    icon: ICONS.app
-  });
-  
-  mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-  
-  mainWindow.on('close', (e) => {
-    // Save window position
-    store.set('windowBounds', mainWindow.getBounds());
-    // Don't actually close, just hide
-    e.preventDefault();
-    mainWindow.hide();
-  });
-  
-  // Wait for page to load, then send initial data
-  mainWindow.webContents.once('did-finish-load', async () => {
-    try {
-      console.log('Window loaded, checking yt-dlp and ffmpeg availability...');
-      const [ytdlpInfo, ffmpegInfo] = await Promise.all([
-        checkYtDlpAvailability(),
-        checkFfmpegAvailability()
-      ]);
-      ytdlpAvailable = ytdlpInfo.available;
-      
-      mainWindow.webContents.send('ytdlp-status', ytdlpInfo);
-      mainWindow.webContents.send('ffmpeg-status', ffmpegInfo);
-      
-      // Load saved settings
-      const settings = store.get('settings', {});
-      mainWindow.webContents.send('settings-loaded', settings);
-      
-      // Load saved queue state
-      const queueState = store.get('queueState');
-      if (queueState) {
-        downloadQueue.loadState(queueState);
-      }
-      
-      // Send initial queue state
-      mainWindow.webContents.send('queue-updated', downloadQueue.getQueueState());
-      
-      // Start disk space monitoring if download path is set
-      if (settings.downloadPath) {
-        startDiskSpaceMonitoring(settings.downloadPath);
-      }
-      
-      // Send startup status
-      autoLauncher.isEnabled().then(isEnabled => {
-        mainWindow.webContents.send('startup-status', isEnabled);
-      }).catch(err => {
-        console.error('Error checking startup status:', err);
-      });
-      
-    } catch (error) {
-      console.error('Failed to initialize:', error);
-    }
-  });
-  
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
-}
-
-/**
- * Start tray icon flashing animation
- */
-function startAnimation() {
-  if (isAnimating) return;
-  
-  isAnimating = true;
-  let showAlert = false;
-  
-  animationInterval = setInterval(() => {
-    let icon;
-    
-    if (usePngIcons) {
-      const iconPath = showAlert ? ICONS.alert : ICONS.normal;
-      icon = nativeImage.createFromPath(iconPath);
-    } else {
-      const iconData = showAlert ? FALLBACK_ICON_ALERT : FALLBACK_ICON;
-      icon = nativeImage.createFromDataURL(iconData);
-    }
-    
-    if (process.platform === 'darwin') {
-      icon = icon.resize({ width: 22, height: 22 });
-    } else {
-      icon = icon.resize({ width: 16, height: 16 });
-    }
-    
-    tray.setImage(icon);
-    showAlert = !showAlert;
-  }, 750); // 0.75 seconds
-}
-
-/**
- * Stop tray icon animation
- */
-function stopAnimation() {
-  if (animationInterval) {
-    clearInterval(animationInterval);
-    animationInterval = null;
-  }
-  
-  isAnimating = false;
-  
-  let icon;
-  if (usePngIcons) {
-    icon = nativeImage.createFromPath(ICONS.normal);
-  } else {
-    icon = nativeImage.createFromDataURL(FALLBACK_ICON);
-  }
-  
-  if (process.platform === 'darwin') {
-    icon = icon.resize({ width: 22, height: 22 });
-  } else {
-    icon = icon.resize({ width: 16, height: 16 });
-  }
-  
-  tray.setImage(icon);
-}
-
-/**
- * Start monitoring disk space
- */
-function startDiskSpaceMonitoring(downloadPath) {
-  stopDiskSpaceMonitoring();
-  
-  const checkDiskSpace = async () => {
-    try {
-      const diskSpace = await getDiskSpace(downloadPath);
-      
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('disk-space-updated', {
-          total: diskSpace.total,
-          free: diskSpace.free,
-          used: diskSpace.used,
-          freeFormatted: formatBytes(diskSpace.free),
-          totalFormatted: formatBytes(diskSpace.total)
-        });
-        
-        // Warn if less than 5GB
-        const fiveGB = 5 * 1024 * 1024 * 1024;
-        const oneGB = 1 * 1024 * 1024 * 1024;
-        
-        if (diskSpace.free < oneGB) {
-          mainWindow.webContents.send('disk-space-critical', {
-            free: diskSpace.free,
-            freeFormatted: formatBytes(diskSpace.free)
-          });
-        } else if (diskSpace.free < fiveGB) {
-          mainWindow.webContents.send('disk-space-low', {
-            free: diskSpace.free,
-            freeFormatted: formatBytes(diskSpace.free)
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Error checking disk space:', error);
-    }
-  };
-  
-  // Check immediately
-  checkDiskSpace();
-  
-  // Check every 30 seconds
-  diskSpaceInterval = setInterval(checkDiskSpace, 30000);
-}
-
-/**
- * Stop disk space monitoring
- */
-function stopDiskSpaceMonitoring() {
-  if (diskSpaceInterval) {
-    clearInterval(diskSpaceInterval);
-    diskSpaceInterval = null;
-  }
-}
-
-// ===== IPC HANDLERS =====
-
-/**
- * Save settings
- */
-ipcMain.on('save-settings', (event, settings) => {
-  store.set('settings', settings);
-  
-  // Start/update disk space monitoring if download path changed
-  if (settings.downloadPath) {
-    startDiskSpaceMonitoring(settings.downloadPath);
-  }
-  
-  event.reply('settings-saved', true);
-});
-
-/**
- * Choose download directory
- */
-ipcMain.handle('choose-download-directory', async (event) => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory', 'createDirectory']
-  });
-  
-  if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
-  }
-  
-  return null;
-});
-
-/**
- * Add download to queue
- */
-ipcMain.on('add-download', (event, { url, outputPath, options }) => {
-  const downloadId = downloadQueue.addDownload(url, outputPath, options);
-  event.reply('download-added', downloadId);
-});
-
-/**
- * Cancel download
- */
-ipcMain.on('cancel-download', (event, downloadId) => {
-  const success = downloadQueue.cancelDownload(downloadId);
-  event.reply('download-cancelled', { id: downloadId, success });
-});
-
-/**
- * Retry download
- */
-ipcMain.on('retry-download', (event, downloadId) => {
-  const newId = downloadQueue.retryDownload(downloadId);
-  event.reply('download-retried', { oldId: downloadId, newId });
-});
-
-/**
- * Retry download with special options (for overcoming download challenges)
- */
-ipcMain.on('retry-with-options', (event, { downloadId, options }) => {
-  const newId = downloadQueue.retryWithOptions(downloadId, options);
-  event.reply('download-retried', { oldId: downloadId, newId });
-});
-
-/**
- * Get download info for retry modal
- */
-ipcMain.handle('get-download-info', async (event, downloadId) => {
-  return downloadQueue.getDownload(downloadId);
-});
-
-/**
- * Choose cookie file
- */
-ipcMain.handle('choose-cookie-file', async (event) => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
-    filters: [
-      { name: 'Cookie Files', extensions: ['txt', 'cookies'] },
-      { name: 'All Files', extensions: ['*'] }
-    ]
-  });
-  
-  if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
-  }
-  
-  return null;
-});
-
-/**
- * Open downloaded video
- */
-ipcMain.on('open-video', (event, filepath) => {
-  shell.openPath(filepath);
-});
-
-/**
- * Show video in folder
- */
-ipcMain.on('show-in-folder', (event, filepath) => {
-  shell.showItemInFolder(filepath);
-});
-
-/**
- * Hide window to tray
- */
-ipcMain.on('hide-window', (event) => {
-  if (mainWindow) {
-    mainWindow.hide();
-  }
-});
-
-/**
- * Toggle startup
- */
-ipcMain.handle('toggle-startup', async () => {
+async function recheckTools() {
+  if (toolCheck) return toolCheck;
+  toolCheck = (async () => {
+    const [ytdlp, ffmpeg] = await Promise.all([
+      tools.checkYtDlpAvailability({ refresh: true }),
+      tools.checkFfmpegAvailability({ refresh: true }),
+    ]);
+    toolState = { ytdlp, ffmpeg };
+    send('tools', toolState);
+    return toolState;
+  })();
   try {
-    const isEnabled = await autoLauncher.isEnabled();
-    
-    if (isEnabled) {
-      await autoLauncher.disable();
-      return { enabled: false };
-    } else {
-      await autoLauncher.enable();
-      return { enabled: true };
+    return await toolCheck;
+  } finally {
+    toolCheck = null;
+  }
+}
+
+async function checkDisk() {
+  const selected = settings.downloadPath;
+  const result = selected
+    ? await tools.getDiskSpace(selected)
+    : { available: false, total: null, free: null, used: null, error: null };
+  if (settings.downloadPath !== selected) return;
+  diskState = result;
+  send('disk-space', diskState);
+}
+
+function updateTray() {
+  if (!tray) return;
+  const busy = queue?.getQueueState().isProcessing;
+  const icon = nativeImage
+    .createFromPath(busy ? ICONS['icon-alert'] : ICONS['icon-normal'])
+    .resize({
+      width: process.platform === 'darwin' ? 22 : 16,
+      height: process.platform === 'darwin' ? 22 : 16,
+    });
+  // A static busy indicator respects reduced-motion preferences.
+  tray.setImage(icon);
+  tray.setToolTip(
+    busy
+      ? 'VideoNinja: ' + (settings.language === 'fi' ? 'lataus käynnissä' : 'downloading')
+      : 'VideoNinja',
+  );
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: settings.language === 'fi' ? 'Avaa VideoNinja' : 'Open VideoNinja',
+        click: showWindow,
+      },
+      { type: 'separator' },
+      { label: settings.language === 'fi' ? 'Lopeta' : 'Quit', click: () => app.quit() },
+    ]),
+  );
+}
+
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createWindow() {
+  const bounds = sanitizeWindowBounds(store.get('windowBounds')) || {};
+  const visible =
+    bounds.x !== undefined &&
+    bounds.y !== undefined &&
+    screen
+      .getAllDisplays()
+      .some(
+        ({ workArea }) =>
+          bounds.x + bounds.width > workArea.x &&
+          bounds.x < workArea.x + workArea.width &&
+          bounds.y + bounds.height > workArea.y &&
+          bounds.y < workArea.y + workArea.height,
+      );
+  mainWindow = new BrowserWindow({
+    width: bounds.width || 1000,
+    height: bounds.height || 800,
+    ...(visible ? { x: bounds.x, y: bounds.y } : {}),
+    minWidth: 420,
+    minHeight: 420,
+    show: false,
+    title: 'VideoNinja',
+    icon: ICONS.icon,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      allowRunningInsecureContent: false,
+    },
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  mainWindow.webContents.session.setPermissionRequestHandler((contents, permission, callback) => {
+    callback(
+      contents === mainWindow?.webContents &&
+        contents.getURL() === APP_URL &&
+        permission === 'clipboard-sanitized-write',
+    );
+  });
+  mainWindow.webContents.session.setPermissionCheckHandler(
+    (contents, permission) =>
+      contents === mainWindow?.webContents &&
+      contents.getURL() === APP_URL &&
+      permission === 'clipboard-sanitized-write',
+  );
+  mainWindow.on('close', (event) => {
+    try {
+      store.set('windowBounds', mainWindow.getBounds());
+    } catch {
+      warn('WINDOW_SAVE_FAILED');
     }
-  } catch (error) {
-    console.error('Error toggling startup:', error);
-    return { enabled: false, error: error.message };
-  }
-});
-
-// ===== DOWNLOAD QUEUE EVENTS =====
-
-downloadQueue.on('queue-updated', (state) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('queue-updated', state);
-  }
-  
-  // Save queue state
-  store.set('queueState', downloadQueue.getStateForSave());
-});
-
-downloadQueue.on('download-started', (download) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('download-started', download);
-  }
-  
-  // Start flashing animation when download starts
-  startAnimation();
-});
-
-downloadQueue.on('download-progress', (progress) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('download-progress', progress);
-  }
-});
-
-downloadQueue.on('download-completed', (download) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('download-completed', download);
-  }
-  
-  // Stop animation when download completes
-  stopAnimation();
-});
-
-downloadQueue.on('download-failed', (download) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('download-failed', download);
-  }
-  
-  // Stop animation if download fails
-  stopAnimation();
-});
-
-// ===== APP LIFECYCLE =====
-
-app.whenReady().then(async () => {
-  createTray();
-  
-  // Check for yt-dlp availability
-  const ytdlpInfo = await checkYtDlpAvailability();
-  ytdlpAvailable = ytdlpInfo.available;
-  console.log('yt-dlp available:', ytdlpAvailable);
-  
-  // Show main window on first launch
-  showMainWindow();
-});
-
-app.on('window-all-closed', (e) => {
-  // Prevent app from quitting when window is closed (keep in tray)
-  // Comment out the next line if you want app to quit when window closes
-  e.preventDefault();
-});
-
-app.on('before-quit', () => {
-  if (animationInterval) {
-    clearInterval(animationInterval);
-  }
-  stopDiskSpaceMonitoring();
-  
-  // Actually close the window when quitting
-  if (mainWindow) {
-    mainWindow.destroy();
+    if (!quitting && tray) {
+      event.preventDefault();
+      mainWindow.hide();
+    } else if (!quitting) {
+      event.preventDefault();
+      app.quit();
+    }
+  });
+  mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+  mainWindow.once('ready-to-show', () => {
+    if (!silent) mainWindow.show();
+  });
+  mainWindow.loadURL(APP_URL);
+}
+
+async function initialize() {
+  protocol.handle('videoninja', async (request) => {
+    const url = new URL(request.url);
+    const asset = url.host === 'app' && !url.username && !url.password && assets.get(url.pathname);
+    if (request.method !== 'GET' || !asset) return new Response('Not found', { status: 404 });
+    const response = await net.fetch(pathToFileURL(path.join(__dirname, asset[0])).href);
+    return new Response(await response.arrayBuffer(), {
+      headers: {
+        'Content-Type': asset[1],
+        'Content-Security-Policy': CSP,
+        'X-Content-Type-Options': 'nosniff',
+      },
+    });
+  });
+  const restored = await readConfiguration(path.join(app.getPath('userData'), 'config.json'));
+  const { default: Store } = await import('electron-store');
+  store = new Store({ clearInvalidConfig: false });
+  const state = loadPersistedState(store);
+  settings = state.settings;
+  warnings = [...restored.warnings, ...state.warnings];
+  store.set('schemaVersion', 1);
+  store.set('settings', settings);
+  queue = new DownloadQueue();
+  persistence = attachQueuePersistence(queue, store, {
+    onError: () => warn('QUEUE_SAVE_FAILED'),
+  });
+  startup = createStartup(app);
+  try {
+    await startup.isEnabled();
+  } catch {
+    warnings.push('STARTUP_STATUS_UNAVAILABLE');
   }
-});
+  services = createHandlers({
+    queue,
+    dialog,
+    shell,
+    getWindow: () => mainWindow,
+    getSettings: () => settings,
+    tools,
+    startup,
+    canHideWindow: () => Boolean(tray),
+    putSettings: async (value) => {
+      store.set('settings', value);
+      settings = value;
+      updateTray();
+      await checkDisk();
+    },
+    recheckTools,
+    getInitialState: async () => ({
+      version: app.getVersion(),
+      settings,
+      queue: queue.getQueueState(),
+      tools: await (toolCheck || Promise.resolve(toolState)),
+      diskSpace: diskState,
+      startupEnabled: await startup.isEnabled().catch(() => false),
+      warnings,
+    }),
+  });
+  registerIpc(ipcMain, () => mainWindow, services.handlers);
+  queue.on('queue-updated', (value) => {
+    send('state', value);
+    updateTray();
+  });
+  queue.on('download-progress', (value) => send('progress', value));
+  if (!silent) {
+    try {
+      tray = new Tray(nativeImage.createFromPath(ICONS['icon-normal']));
+      tray.on('click', showWindow);
+      updateTray();
+    } catch {
+      warnings.push('TRAY_UNAVAILABLE');
+    }
+  }
+  createWindow();
+  queue.loadState(state.queueState);
+  void recheckTools().catch(() => {
+    warn('TOOL_CHECK_FAILED');
+    toolState = { ytdlp: { available: false, jsRuntimes: [] }, ffmpeg: { available: false } };
+    send('tools', toolState);
+  });
+  void checkDisk();
+  diskTimer = setInterval(() => {
+    void checkDisk();
+  }, 30000);
+}
 
-// Prevent multiple instances
-const gotTheLock = app.requestSingleInstanceLock();
-
-if (!gotTheLock) {
+if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      mainWindow.focus();
-    } else {
-      showMainWindow();
-    }
+    if (store) showWindow();
   });
+  app.on('activate', () => {
+    if (store) showWindow();
+  });
+  app.on('window-all-closed', () => {
+    /* Tray and explicit Quit control application lifetime. */
+  });
+  app.on('before-quit', (event) => {
+    if (quitAllowed || !queue) return;
+    event.preventDefault();
+    if (quitting) return;
+    quitting = true;
+    clearInterval(diskTimer);
+    Promise.all([services?.dispose(), queue.shutdown()])
+      .then(() => persistence.checkpoint())
+      .catch(() => {
+        // Do not print persisted URLs/options or process output.
+        console.error('VideoNinja could not finish its final queue checkpoint.');
+      })
+      .finally(() => {
+        persistence.dispose();
+        quitAllowed = true;
+        app.quit();
+      });
+  });
+  app
+    .whenReady()
+    .then(initialize)
+    .catch(() => {
+      if (!silent)
+        dialog.showErrorBox(
+          'VideoNinja',
+          'The application could not start. Check access to the user-data folder.',
+        );
+      app.exit(1);
+    });
 }

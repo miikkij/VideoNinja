@@ -1,449 +1,339 @@
-const { exec, spawn } = require('child_process');
-const { promisify } = require('util');
-const path = require('path');
-const fs = require('fs').promises;
-const os = require('os');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const tools = require('./tools');
+const { normalizeOptions, validateUrl, QUALITY_PRESETS } = require('./downloadOptions');
+const { runProcess, abortError } = require('./processRunner');
 
-const execAsync = promisify(exec);
+const PROTOCOL = Object.freeze({
+  progress: 'VN_PROGRESS:',
+  stage: 'VN_STAGE:',
+  file: 'VN_FILE:',
+  metadata: 'VN_META:',
+});
+const MAX_ERROR = 8192;
 
-/**
- * Detect available JavaScript runtimes for yt-dlp (needed for YouTube)
- */
-async function detectJsRuntimes() {
-  const runtimes = [];
-  const isWindows = process.platform === 'win32';
-  
-  // Check for Node.js
-  try {
-    const cmd = isWindows ? 'where.exe node' : 'which node';
-    const { stdout } = await execAsync(cmd, { timeout: 3000 });
-    const nodePath = stdout.trim().split('\n')[0].trim();
-    if (nodePath) {
-      runtimes.push({ name: 'node', path: nodePath });
-    }
-  } catch (e) { /* not found */ }
-  
-  // Check for deno
-  try {
-    const cmd = isWindows ? 'where.exe deno' : 'which deno';
-    const { stdout } = await execAsync(cmd, { timeout: 3000 });
-    const denoPath = stdout.trim().split('\n')[0].trim();
-    if (denoPath) {
-      runtimes.push({ name: 'deno', path: denoPath });
-    }
-  } catch (e) { /* not found */ }
-  
-  // Check for bun
-  try {
-    const cmd = isWindows ? 'where.exe bun' : 'which bun';
-    const { stdout } = await execAsync(cmd, { timeout: 3000 });
-    const bunPath = stdout.trim().split('\n')[0].trim();
-    if (bunPath) {
-      runtimes.push({ name: 'bun', path: bunPath });
-    }
-  } catch (e) { /* not found */ }
-  
-  return runtimes;
+function redactError(value, sensitive = []) {
+  let text = String(value || 'The media tool could not finish the download.');
+  for (const secret of sensitive.filter(Boolean).sort((a, b) => b.length - a.length))
+    text = text.split(secret).join('[redacted]');
+  // URLs may contain signed query strings or credentials. Do not persist them.
+  return text
+    .replace(/https?:\/\/[^\s<>"']+/giu, '[URL redacted]')
+    .replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'gu'), '')
+    .slice(-MAX_ERROR);
 }
 
-// Cache detected runtimes
-let cachedRuntimes = null;
+function isWithin(root, filename) {
+  const relative = path.relative(root, filename);
+  return (
+    relative !== '' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    relative !== '..' &&
+    !path.isAbsolute(relative)
+  );
+}
 
-/**
- * Check if yt-dlp is available on the system
- * @returns {Promise<{available: boolean, path: string|null, version: string|null, jsRuntimes: Array}>}
- */
-async function checkYtDlpAvailability() {
-  const isWindows = process.platform === 'win32';
-  const isMac = process.platform === 'darwin';
-  
-  // List of possible locations to check
-  const possibleLocations = [];
-  
-  if (isWindows) {
-    possibleLocations.push(
-      'yt-dlp.exe',
-      'yt-dlp',
-      path.join(process.cwd(), 'yt-dlp.exe'),
-      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'yt-dlp', 'yt-dlp.exe'),
-      'C:\\Program Files\\yt-dlp\\yt-dlp.exe',
+function selectRuntime(options, toolInfo) {
+  const available = toolInfo.jsRuntimes || [];
+  if (!options.jsRuntime || options.jsRuntime === 'auto') return available[0] || null;
+  const selected = available.find((runtime) => runtime.name === options.jsRuntime);
+  if (!selected)
+    throw new Error(
+      `The selected ${options.jsRuntime} JavaScript runtime is missing or unsupported.`,
     );
-  } else if (isMac) {
-    // macOS placeholder - will be implemented later
-    possibleLocations.push(
-      'yt-dlp',
-      '/usr/local/bin/yt-dlp',
-      '/opt/homebrew/bin/yt-dlp',
-    );
+  return selected;
+}
+
+function buildCommonArgs(options, toolInfo, ffmpegInfo) {
+  const args = [
+    ...tools.SAFE_YTDLP_FLAGS,
+    '--no-js-runtimes',
+    '--no-playlist',
+    '--color',
+    'never',
+    '--encoding',
+    'utf-8',
+    '--socket-timeout',
+    '30',
+    '--retries',
+    '3',
+    '--fragment-retries',
+    '3',
+  ];
+  const runtime = selectRuntime(options, toolInfo);
+  if (runtime) args.push('--js-runtimes', `${runtime.name}:${runtime.path}`);
+  if (ffmpegInfo?.available) args.push('--ffmpeg-location', ffmpegInfo.path);
+  if (options.cookiesFromBrowser) args.push('--cookies-from-browser', options.cookiesFromBrowser);
+  if (options.cookieFile) args.push('--cookies', options.cookieFile);
+  if (options.userAgent) args.push('--user-agent', options.userAgent);
+  if (options.referer) args.push('--referer', options.referer);
+  if (options.forceIpv4) args.push('--force-ipv4');
+  if (options.extractorArgs) args.push('--extractor-args', options.extractorArgs);
+  args.push(...(options.extraArgs || []));
+  return args;
+}
+
+function buildDownloadArgs(url, outputRoot, input, toolInfo, ffmpegInfo) {
+  const options = normalizeOptions(input);
+  const args = buildCommonArgs(options, toolInfo, ffmpegInfo);
+  args.push(
+    '--no-simulate',
+    '--newline',
+    '--progress',
+    '--progress-delta',
+    '0.3',
+    '--continue',
+    '--no-overwrites',
+    '--windows-filenames',
+  );
+  args.push(
+    '-o',
+    path.join(outputRoot.replaceAll('%', '%%'), '%(title).180B [%(extractor_key)s-%(id)s].%(ext)s'),
+    '-f',
+    QUALITY_PRESETS[options.quality],
+  );
+  if (options.quality === 'audio' && options.audioFormat && options.audioFormat !== 'original') {
+    if (!ffmpegInfo?.available)
+      throw new Error('Install ffmpeg to convert audio, or choose original audio.');
+    args.push('--extract-audio', '--audio-format', options.audioFormat);
   }
-  
-  // Try each location
-  for (const location of possibleLocations) {
-    try {
-      const command = isWindows 
-        ? `"${location}" --version`
-        : `${location} --version`;
-      
-      const { stdout } = await execAsync(command, { timeout: 5000 });
-      const version = stdout.trim();
-      
-      console.log(`Found yt-dlp at: ${location}, version: ${version}`);
-      
-      // Detect JS runtimes
-      if (!cachedRuntimes) {
-        cachedRuntimes = await detectJsRuntimes();
-        console.log('Detected JS runtimes:', cachedRuntimes.map(r => r.name).join(', ') || 'none');
-      }
-      
-      return {
-        available: true,
-        path: location,
-        version: version,
-        jsRuntimes: cachedRuntimes
-      };
-    } catch (error) {
-      // Continue to next location
-      continue;
-    }
-  }
-  
-  console.log('yt-dlp not found on system');
+  if (options.subtitles) args.push('--write-subs', '--sub-langs', options.subtitleLang || 'en');
+  args.push(
+    '--progress-template',
+    `download:${PROTOCOL.progress}{"downloaded":%(progress.downloaded_bytes|0)j,"total":%(progress.total_bytes,progress.total_bytes_estimate|0)j,"speed":%(progress.speed|0)j,"eta":%(progress.eta|0)j}`,
+  );
+  args.push('--progress-template', `postprocess:${PROTOCOL.stage}merging`);
+  args.push(
+    '--print',
+    `before_dl:${PROTOCOL.metadata}{"title":%(title)j,"id":%(id)j,"duration":%(duration|0)j,"ext":%(ext)j}`,
+  );
+  args.push('--print', `after_move:${PROTOCOL.file}%(filepath)j`);
+  args.push('--', validateUrl(url));
+  return args;
+}
+
+function safeMetadata(input) {
+  if (!input || typeof input !== 'object') return null;
   return {
-    available: false,
-    path: null,
-    version: null,
-    jsRuntimes: []
+    title: typeof input.title === 'string' ? input.title.slice(0, 500) : '',
+    id: typeof input.id === 'string' ? input.id.slice(0, 200) : '',
+    duration:
+      Number.isFinite(Number(input.duration)) && Number(input.duration) >= 0
+        ? Number(input.duration)
+        : null,
+    ext: typeof input.ext === 'string' && /^[a-z0-9]{1,12}$/iu.test(input.ext) ? input.ext : '',
   };
 }
 
-/**
- * Download a video using yt-dlp
- * @param {string} url - Video URL
- * @param {string} outputPath - Directory to save video
- * @param {object} options - Download options
- * @param {function} progressCallback - Callback for progress updates
- * @returns {Promise<{success: boolean, filepath: string|null, error: string|null}>}
- */
-async function downloadVideo(url, outputPath, options = {}, progressCallback = null) {
-  const ytdlpInfo = await checkYtDlpAvailability();
-  
-  if (!ytdlpInfo.available) {
-    throw new Error('yt-dlp is not available on this system');
+/** Dependency injection keeps process, filesystem and network tests isolated. */
+function createDownloader(deps = {}) {
+  const fileSystem = deps.fs || fs;
+  const execute = deps.runProcess || runProcess;
+  const toolService = deps.tools || tools;
+
+  async function getTools(signal) {
+    if (signal?.aborted) throw abortError();
+    const [ytdlpInfo, ffmpegInfo] = await Promise.all([
+      toolService.checkYtDlpAvailability({ signal }),
+      toolService.checkFfmpegAvailability({ signal }),
+    ]);
+    if (signal?.aborted) throw abortError();
+    if (!ytdlpInfo.available)
+      throw new Error(
+        'yt-dlp is unavailable. Install or update yt-dlp, then check the tools again.',
+      );
+    return { ytdlpInfo, ffmpegInfo };
   }
-  
-  const ytdlpPath = ytdlpInfo.path;
-  
-  // Build command arguments
-  const args = [url];
-  
-  // Output template
-  const outputTemplate = path.join(outputPath, '%(title)s.%(ext)s');
-  args.push('-o', outputTemplate);
-  
-  // Add format option if specified
-  if (options.format) {
-    args.push('-f', options.format);
-  }
-  
-  // Add subtitles if requested
-  if (options.subtitles) {
-    args.push('--write-subs');
-    args.push('--sub-lang', options.subtitleLang || 'en');
-  }
-  
-  // === COOKIE / AUTH OPTIONS (skip if retrying without cookies) ===
-  if (!options._skipCookies) {
-    if (options.cookiesFromBrowser) {
-      args.push('--cookies-from-browser', options.cookiesFromBrowser);
-    } else if (options.cookieFile) {
-      args.push('--cookies', options.cookieFile);
-    }
-  }
-  
-  // === CUSTOM USER-AGENT ===
-  if (options.userAgent) {
-    args.push('--user-agent', options.userAgent);
-  }
-  
-  // === CUSTOM REFERER ===
-  if (options.referer) {
-    args.push('--referer', options.referer);
-  }
-  
-  // === FORCE IPv4 ===
-  if (options.forceIpv4) {
-    args.push('--force-ipv4');
-  }
-  
-  // === EXTRACTOR ARGUMENTS ===
-  if (options.extractorArgs) {
-    args.push('--extractor-args', options.extractorArgs);
-  }
-  
-  // === JS RUNTIME (only for YouTube, where it's actually needed) ===
-  const isYouTube = /youtu\.?be/i.test(url);
-  if (isYouTube) {
-    if (options.jsRuntime) {
-      args.push('--js-runtimes', options.jsRuntime);
-    } else if (cachedRuntimes && cachedRuntimes.length > 0) {
-      const preferred = cachedRuntimes.find(r => r.name === 'node') || cachedRuntimes[0];
-      args.push('--js-runtimes', preferred.name);
-    }
-  }
-  
-  // === EXTRA RAW ARGUMENTS ===
-  if (options.extraArgs && options.extraArgs.length > 0) {
-    const extraList = Array.isArray(options.extraArgs) 
-      ? options.extraArgs 
-      : options.extraArgs.split(/\s+/).filter(a => a);
-    args.push(...extraList);
-  }
-  
-  // Add other common options
-  args.push('--no-playlist'); // Don't download playlists by default
-  args.push('--progress'); // Show progress
-  args.push('--continue'); // Resume partial downloads
-  args.push('--no-overwrites'); // Skip if file already fully downloaded
-  
-  console.log(`Starting download: ${ytdlpPath} ${args.join(' ')}`);
-  
-  return new Promise((resolve, reject) => {
-    const process = spawn(ytdlpPath, args, {
-      shell: true,
-      windowsHide: true
-    });
-    
-    let downloadedFile = null;
-    let errorOutput = '';
-    
-    // Parse stdout for progress
-    process.stdout.on('data', (data) => {
-      const output = data.toString();
-      console.log('yt-dlp output:', output);
-      
-      // Parse progress from output
-      // Example: [download]  45.5% of 123.45MiB at 1.23MiB/s ETA 00:45
-      const progressMatch = output.match(/\[download\]\s+(\d+\.?\d*)%/);
-      if (progressMatch && progressCallback) {
-        const percent = parseFloat(progressMatch[1]);
-        progressCallback({
-          type: 'progress',
-          percent: percent,
-          status: 'downloading'
-        });
-      }
-      
-      // Check for destination filename
-      const destMatch = output.match(/\[download\] Destination: (.+)/);
-      if (destMatch) {
-        downloadedFile = destMatch[1].trim();
-      }
-      
-      // Check if already downloaded
-      const alreadyMatch = output.match(/\[download\] (.+) has already been downloaded/);
-      if (alreadyMatch) {
-        downloadedFile = alreadyMatch[1].trim();
-      }
-    });
-    
-    process.stderr.on('data', (data) => {
-      const error = data.toString();
-      console.error('yt-dlp error:', error);
-      errorOutput += error;
-      
-      // Still parse for progress as yt-dlp sometimes outputs to stderr
-      const progressMatch = error.match(/\[download\]\s+(\d+\.?\d*)%/);
-      if (progressMatch && progressCallback) {
-        const percent = parseFloat(progressMatch[1]);
-        progressCallback({
-          type: 'progress',
-          percent: percent,
-          status: 'downloading'
-        });
-      }
-    });
-    
-    process.on('close', async (code) => {
-      if (code === 0) {
-        console.log('Download completed successfully');
-        if (progressCallback) {
-          progressCallback({
-            type: 'complete',
-            percent: 100,
-            status: 'completed'
-          });
-        }
-        resolve({
-          success: true,
-          filepath: downloadedFile,
-          error: null
-        });
-      } else {
-        // Check if this is a cookie-related error and we can auto-retry without cookies
-        const isCookieError = /could not copy.*cookie|cookie.*database|cookie.*locked|permission.*cookie/i.test(errorOutput);
-        const hasCookieOption = (options.cookiesFromBrowser || options.cookieFile) && !options._skipCookies;
-        
-        if (isCookieError && hasCookieOption) {
-          console.log('Cookie error detected, auto-retrying without cookies...');
-          if (progressCallback) {
-            progressCallback({
+
+  /**
+   * @param {string} url
+   * @param {string} outputPath
+   * @param {import('./downloadOptions').DownloadOptions} input
+   * @param {Function|null} progressCallback Receives progress, metadata and completion.
+   * @param {{signal?: AbortSignal}} control
+   * @returns {Promise<{success: boolean, filepath: string|null, error: string|null, metadata?: object}>}
+   * @throws {Error} Invalid input or AbortError after subprocess cleanup.
+   */
+  async function downloadVideo(
+    url,
+    outputPath,
+    input = {},
+    progressCallback = null,
+    { signal } = {},
+  ) {
+    url = validateUrl(url);
+    const options = normalizeOptions(input);
+    const secrets = [url, options.cookieFile, options.referer, options.userAgent, outputPath];
+    try {
+      if (typeof outputPath !== 'string' || !path.isAbsolute(outputPath))
+        throw new Error('Choose an absolute download folder.');
+      const root = await fileSystem.realpath(outputPath);
+      if (!(await fileSystem.stat(root)).isDirectory())
+        throw new Error('The download folder is unavailable.');
+      await fileSystem.access(root, 2);
+      const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
+      const args = buildDownloadArgs(url, root, options, ytdlpInfo, ffmpegInfo);
+      let filename = null,
+        metadata = null,
+        errorOutput = '',
+        lastPercent = 0;
+      const onLine = (line) => {
+        try {
+          if (line.startsWith(PROTOCOL.progress)) {
+            const progress = JSON.parse(line.slice(PROTOCOL.progress.length));
+            const total = Number(progress.total),
+              downloaded = Number(progress.downloaded);
+            const percent =
+              total > 0 && Number.isFinite(downloaded)
+                ? Math.max(0, Math.min(100, (downloaded / total) * 100))
+                : 0;
+            lastPercent = percent;
+            progressCallback?.({
               type: 'progress',
-              percent: 0,
-              status: 'Retrying without cookies...'
+              percent,
+              status: 'downloading',
+              speed: Number(progress.speed) || 0,
+              eta: Number(progress.eta) || 0,
+            });
+          } else if (line.startsWith(PROTOCOL.stage))
+            progressCallback?.({ type: 'progress', percent: lastPercent, status: 'merging' });
+          else if (line.startsWith(PROTOCOL.file)) {
+            const parsed = JSON.parse(line.slice(PROTOCOL.file.length));
+            if (typeof parsed === 'string') filename = parsed;
+          } else if (line.startsWith(PROTOCOL.metadata)) {
+            metadata = safeMetadata(JSON.parse(line.slice(PROTOCOL.metadata.length)));
+            progressCallback?.({
+              type: 'metadata',
+              percent: lastPercent,
+              status: 'downloading',
+              metadata,
             });
           }
-          try {
-            const retryResult = await downloadVideo(url, outputPath, { ...options, _skipCookies: true }, progressCallback);
-            resolve(retryResult);
-          } catch (retryError) {
-            resolve({
-              success: false,
-              filepath: null,
-              error: retryError.message
-            });
-          }
-          return;
+        } catch {
+          /* Ignore malformed protocol lines without rendering or evaluating them. */
         }
-        
-        console.error('Download failed with code:', code);
-        if (progressCallback) {
-          progressCallback({
-            type: 'error',
-            percent: 0,
-            status: 'failed',
-            error: errorOutput
-          });
-        }
-        resolve({
-          success: false,
-          filepath: null,
-          error: errorOutput || `Download failed with exit code ${code}`
-        });
-      }
-    });
-    
-    process.on('error', (error) => {
-      console.error('Process error:', error);
-      if (progressCallback) {
-        progressCallback({
-          type: 'error',
-          percent: 0,
-          status: 'failed',
-          error: error.message
-        });
-      }
-      reject(error);
-    });
-  });
-}
-
-/**
- * Get disk space information for a given path
- * @param {string} dirPath - Directory path to check
- * @returns {Promise<{total: number, free: number, used: number}>} Size in bytes
- */
-async function getDiskSpace(dirPath) {
-  // This is a simplified version - in production, use a library like 'diskusage'
-  // For now, return mock data
-  // TODO: Implement proper disk space checking
-  
-  if (process.platform === 'win32') {
-    // Windows: use wmic or fsutil
-    try {
-      const drive = path.parse(dirPath).root;
-      const { stdout } = await execAsync(`wmic logicaldisk where "DeviceID='${drive.replace('\\', '')}'" get FreeSpace,Size`);
-      
-      const lines = stdout.trim().split('\n');
-      if (lines.length >= 2) {
-        const values = lines[1].trim().split(/\s+/);
-        const free = parseInt(values[0]);
-        const total = parseInt(values[1]);
-        
-        return {
-          total: total,
-          free: free,
-          used: total - free
-        };
-      }
+      };
+      const result = await execute(ytdlpInfo.path, args, {
+        cwd: root,
+        signal,
+        onStdoutLine: onLine,
+        onStderrLine: (line) => {
+          onLine(line);
+          if (!Object.values(PROTOCOL).some((prefix) => line.startsWith(prefix)))
+            errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+        },
+      });
+      if (signal?.aborted) throw abortError();
+      if (result.code !== 0)
+        throw new Error(errorOutput || `yt-dlp exited with code ${result.code}.`);
+      if (!filename || !path.isAbsolute(filename))
+        throw new Error(
+          'The download finished without reporting its final file. Update yt-dlp and retry.',
+        );
+      const finalPath = await fileSystem.realpath(filename);
+      if (!isWithin(root, finalPath) || !(await fileSystem.stat(finalPath)).isFile())
+        throw new Error('The final file is outside the download folder or is not a regular file.');
+      progressCallback?.({ type: 'complete', percent: 100, status: 'completed' });
+      return { success: true, filepath: finalPath, error: null, metadata };
     } catch (error) {
-      console.error('Error getting disk space:', error);
+      if (error.name === 'AbortError' || signal?.aborted) throw abortError();
+      return { success: false, filepath: null, error: redactError(error.message, secrets) };
     }
   }
-  
-  // Fallback: return mock data
-  return {
-    total: 500 * 1024 * 1024 * 1024, // 500 GB
-    free: 50 * 1024 * 1024 * 1024,   // 50 GB
-    used: 450 * 1024 * 1024 * 1024   // 450 GB
-  };
+
+  async function fetchMetadata(url, input = {}, { signal } = {}) {
+    url = validateUrl(url);
+    const options = normalizeOptions(input);
+    const secrets = [url, options.cookieFile, options.referer, options.userAgent];
+    try {
+      const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
+      const args = [
+        ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo),
+        '--skip-download',
+        '--simulate',
+        '--print',
+        `${PROTOCOL.metadata}{"title":%(title)j,"id":%(id)j,"duration":%(duration|0)j,"ext":%(ext)j}`,
+        '--',
+        url,
+      ];
+      let metadata = null,
+        errorOutput = '';
+      const result = await execute(ytdlpInfo.path, args, {
+        signal,
+        timeoutMs: 60000,
+        cwd: path.dirname(ytdlpInfo.path),
+        onStdoutLine: (line) => {
+          if (line.startsWith(PROTOCOL.metadata)) {
+            try {
+              metadata = safeMetadata(JSON.parse(line.slice(PROTOCOL.metadata.length)));
+            } catch {
+              /* Invalid metadata. */
+            }
+          }
+        },
+        onStderrLine: (line) => {
+          errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+        },
+      });
+      if (signal?.aborted) throw abortError();
+      if (result.code !== 0 || !metadata)
+        throw new Error(errorOutput || 'Unable to read video information.');
+      return metadata;
+    } catch (error) {
+      if (error.name === 'AbortError' || signal?.aborted) throw abortError();
+      // Raw subprocess errors can contain cookie paths and signed URLs.
+      // eslint-disable-next-line preserve-caught-error -- Intentionally discard sensitive error causes.
+      throw new Error(redactError(error.message, secrets));
+    }
+  }
+
+  async function getDiskSpace(dirPath) {
+    try {
+      if (typeof dirPath !== 'string' || !path.isAbsolute(dirPath))
+        throw new Error('Invalid folder.');
+      const stats = await fileSystem.statfs(dirPath, { bigint: true });
+      const total = Number(stats.blocks * stats.bsize),
+        free = Number(stats.bavail * stats.bsize),
+        used = Number((stats.blocks - stats.bfree) * stats.bsize);
+      if (
+        ![total, free, used].every((value) => Number.isFinite(value) && value >= 0) ||
+        free > total ||
+        used > total
+      )
+        throw new Error('Invalid filesystem capacity.');
+      return { available: true, total, free, used, error: null };
+    } catch {
+      return {
+        available: false,
+        total: null,
+        free: null,
+        used: null,
+        error: 'Disk space is unavailable for this folder.',
+      };
+    }
+  }
+  return { downloadVideo, fetchMetadata, getDiskSpace };
 }
 
-/**
- * Format bytes to human readable string
- * @param {number} bytes 
- * @returns {string}
- */
 function formatBytes(bytes) {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return 'Unknown';
   if (bytes === 0) return '0 B';
-  
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-/**
- * Check if ffmpeg is available on the system
- * @returns {Promise<{available: boolean, path: string|null, version: string|null}>}
- */
-async function checkFfmpegAvailability() {
-  const isWindows = process.platform === 'win32';
-  const isMac = process.platform === 'darwin';
-
-  const possibleLocations = [];
-
-  if (isWindows) {
-    possibleLocations.push(
-      'ffmpeg.exe',
-      'ffmpeg',
-      path.join(process.cwd(), 'ffmpeg.exe'),
-      'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
-    );
-  } else if (isMac) {
-    possibleLocations.push(
-      'ffmpeg',
-      '/usr/local/bin/ffmpeg',
-      '/opt/homebrew/bin/ffmpeg',
-    );
-  }
-
-  for (const location of possibleLocations) {
-    try {
-      const command = isWindows
-        ? `"${location}" -version`
-        : `${location} -version`;
-
-      const { stdout } = await execAsync(command, { timeout: 5000 });
-      const firstLine = stdout.trim().split('\n')[0];
-      const match = firstLine.match(/ffmpeg version (\S+)/);
-      const version = match ? match[1] : firstLine;
-
-      console.log(`Found ffmpeg at: ${location}, version: ${version}`);
-      return { available: true, path: location, version: version };
-    } catch (error) {
-      continue;
-    }
-  }
-
-  console.log('ffmpeg not found on system');
-  return { available: false, path: null, version: null };
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  const index = Math.max(
+    0,
+    Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024))),
+  );
+  return `${Number((bytes / 1024 ** index).toFixed(2))} ${units[index]}`;
 }
 
 module.exports = {
-  checkYtDlpAvailability,
-  checkFfmpegAvailability,
-  downloadVideo,
-  getDiskSpace,
-  formatBytes
+  checkYtDlpAvailability: tools.checkYtDlpAvailability,
+  checkFfmpegAvailability: tools.checkFfmpegAvailability,
+  formatBytes,
+  PROTOCOL,
+  redactError,
+  isWithin,
+  buildDownloadArgs,
+  createDownloader,
+  ...createDownloader(),
 };

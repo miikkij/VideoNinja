@@ -24,9 +24,18 @@ If applicable, add screenshots.
 
 ## Environment
 
-- **OS**: [e.g., Windows 11, macOS 14]
-- **VideoNinja Version**: [e.g., 1.0.0]
-- **yt-dlp Version**: [e.g., 2024.12.01]
+- **OS and architecture**:
+- **VideoNinja version (shown in the header) or source commit**:
+- **Launch method**: [installed / portable / pnpm start]
+- **yt-dlp version**: [yt-dlp --version]
+- **ffmpeg version**: [ffmpeg -version]
+- **JavaScript runtime and version**: [node --version or deno --version]
+
+## Error Details
+
+Include the relevant error text with private URLs, credentials and personal paths
+redacted. Never attach cookies or an unredacted settings file. Report security
+vulnerabilities through SECURITY.md instead of this public template.
 
 ## Additional Context
 

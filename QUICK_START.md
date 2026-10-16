@@ -1,140 +1,83 @@
-# 🚀 VideoNinja - Quick Start Guide
+# VideoNinja quick start
 
-## Prerequisites
+[Suomeksi](QUICK_START.fi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-VideoNinja needs **yt-dlp** (required) and **ffmpeg** (recommended for best quality).
+## 1. Install the tools
 
-### Windows
+Install [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation),
+[ffmpeg with ffprobe](https://ffmpeg.org/download.html) and
+[Deno](https://docs.deno.com/runtime/getting_started/installation/).
+They are separate from VideoNinja.
 
-**Easiest** — install both with [Chocolatey](https://chocolatey.org/):
+If you already use Chocolatey on Windows, run in an elevated terminal:
 
 ```powershell
-choco install yt-dlp ffmpeg -y
+choco install yt-dlp ffmpeg deno -y
 ```
 
-**Manual install:**
-1. Download `yt-dlp.exe` from [yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases)
-2. Download ffmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (essentials build)
-3. Place both in the same folder as VideoNinja, or any folder in your PATH
+With Homebrew on macOS:
 
-### macOS
-
-```bash
-brew install yt-dlp ffmpeg
+```sh
+brew install yt-dlp ffmpeg deno
 ```
 
----
+On Linux, use your distribution's ffmpeg package and the official yt-dlp and Deno
+installation instructions above. Distribution yt-dlp packages can lag site changes.
+Keep executables in a trusted PATH directory, such as your user-local bin folder.
 
-## Running VideoNinja
+Check in a new terminal:
 
-### 1. Install Dependencies
-
-```bash
-pnpm install
+```sh
+yt-dlp --version
+ffmpeg -version
+ffprobe -version
+deno --version
 ```
 
-If you don't have pnpm installed:
+Deno 2.3+ or Node.js 22+ can support YouTube challenges. The
+[yt-dlp EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS) explains the matching
+scripts. Official yt-dlp executables include EJS; other distributions may require
+extra installation. VideoNinja does not download challenge code automatically.
 
-```bash
-npm install -g pnpm
-```
+## 2. Launch and choose a folder
 
-### 2. Start the App
+Launch your packaged VideoNinja application, or follow the
+[source setup](README.md#run-from-source). Select **English** or **Suomi** in the header.
 
-```bash
-pnpm start
-```
+1. Settings opens automatically when setup is incomplete.
+2. Choose a writable **Download folder**.
+3. Review yt-dlp, ffmpeg and runtime status.
+4. After installing a missing tool, choose **Check tools again**.
+5. Settings save automatically. A failed save stays visible with a retry action.
 
-### 3. First Launch
+Restart the app after changing system PATH. **Settings** and F3 open preferences
+at any time. Start at login is optional and should be enabled from the installed app.
 
-1. The app will check if yt-dlp is installed
-2. If found, you'll see the Settings panel
-3. Click **"📁 Choose"** to select where to save videos
-4. Once set, the download panel will appear
+## 3. Download
 
-### 4. Download Your First Video
+1. Paste one or more permitted HTTP(S) video links, one per line.
+2. Choose the quality. **Best available** is a useful first choice.
+3. Optionally choose **Preview first link** to fetch its title and duration.
+4. Click **Add to queue**, or press Enter. Shift+Enter inserts a newline.
+5. The form clears only after the main process accepts the batch.
 
-1. Paste a YouTube URL in the text box
-2. Select quality (optional - defaults to best)
-3. Click **"⬇️ Start Download"**
-4. Watch the progress in the Downloads list!
+The queue runs one download at a time. Use **Pause**, **Resume**, **Cancel** and
+the move controls to manage it. Pause preserves partial files where supported.
+Cancel stops that job; it does not delete downloaded or partial files.
 
----
+For **Audio only**, choose Original format or a conversion format. Conversion and
+separate-stream merging require ffmpeg. A quality limit is a maximum, not a promise
+that the source offers that resolution.
 
-## Building for Distribution
+## 4. Use history and exit
 
-### Windows
+Completed entries offer file and folder actions. A file moved or removed outside
+the app can no longer be opened from its old entry. Failed entries retain an
+error with copy and retry controls.
 
-```bash
-pnpm run build:win
-```
+Search history, export a reduced JSON record, or clear the history after confirming.
+Neither clearing nor exporting changes media files.
 
-Output will be in the `dist/` folder:
-- `.exe` installer
-- Portable version
-
-### macOS
-
-```bash
-pnpm run build:mac
-```
-
----
-
-## Troubleshooting
-
-### yt-dlp Not Found
-
-**Problem:** App shows "yt-dlp Not Found" screen
-
-**Solutions:**
-1. Make sure yt-dlp.exe is installed
-2. Try placing it in the same folder as VideoNinja
-3. Restart the app after installing yt-dlp
-
-### Download Fails
-
-**Problem:** Video download shows red X
-
-**Solutions:**
-1. Check your internet connection
-2. Verify the YouTube URL is correct
-3. Try a different quality setting
-4. Click the 🔄 retry button
-
-### No Disk Space Warning
-
-**Problem:** Getting disk space warnings
-
-**Solutions:**
-1. Free up space on your download drive
-2. Change download folder to a drive with more space
-3. Delete old downloads
-
----
-
-## Tips & Tricks
-
-### Multiple Downloads
-- You can queue multiple videos
-- They download one at a time automatically
-- Queue persists if you close the app
-
-### Quality Selection
-- **Best Quality** - Automatically selects the highest quality
-- **4K/1080p/720p** - Specific resolutions
-- **Audio Only** - Downloads just the audio track
-
-### Keyboard Shortcuts
-- Copy URL with `Ctrl+C` / `Cmd+C`
-- Paste with `Ctrl+V` / `Cmd+V`
-- Start download with `Enter` (when URL field is focused)
-
-### System Tray
-- App minimizes to system tray
-- Icon flashes when downloads complete
-- Right-click for quick menu
-
----
-
-**Happy Downloading! 🎬**
+Closing hides the app when a tray exists. Click the tray to reopen, or choose
+**Quit** to stop downloads safely and save the queue. Without a tray, closing exits.
+On the next launch, pending work resumes and paused jobs remain paused.

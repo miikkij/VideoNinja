@@ -7,72 +7,121 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: Package (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm from package.json
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
+          cache: pnpm
 
-      - name: Install pnpm
-        run: npm install -g pnpm
+      - name: Verify release version
+        run: node scripts/verify-release.mjs
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
-      - name: Build for macOS
-        if: matrix.os == 'macos-latest'
-        run: npx electron-builder --mac --publish never
+      - name: Lint and test
+        run: pnpm check
 
-      - name: Build for Windows
-        if: matrix.os == 'windows-latest'
-        run: npx electron-builder --win --publish never
+      - name: Audit dependencies
+        run: pnpm run audit
+
+      - name: Build native packages
+        run: pnpm exec electron-builder --${{ matrix.platform }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Configure Linux packaged sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root dist/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 dist/linux-unpacked/chrome-sandbox
+
+      - name: Smoke test packaged application on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm test:smoke --packaged
+
+      - name: Smoke test packaged application on Windows and macOS
+        if: runner.os != 'Linux'
+        run: pnpm test:smoke --packaged
+
+      - name: Verify expected package artifacts
+        run: pnpm release:verify --artifacts
+
+      - name: Smoke test native package on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/installer-smoke.mjs
+
+      - name: Smoke test native package on Windows and macOS
+        if: runner.os != 'Linux'
+        run: node scripts/installer-smoke.mjs
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: videoninja-${{ matrix.os }}
           path: |
             dist/*.dmg
             dist/*.zip
             dist/*.exe
-          if-no-files-found: warn
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
 
   release:
+    name: Create reviewable release draft
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: videoninja-*
           path: artifacts
           merge-multiple: true
 
-      - name: List artifacts
-        run: find artifacts -type f | head -20
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           generate_release_notes: true
-          draft: false
+          draft: true
           prerelease: false
+          fail_on_unmatched_files: true
           files: |
             artifacts/*.exe
             artifacts/*.dmg
             artifacts/*.zip
+            artifacts/*.AppImage
+            artifacts/*.deb

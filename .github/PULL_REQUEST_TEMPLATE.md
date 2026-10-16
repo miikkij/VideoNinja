@@ -19,5 +19,6 @@ Describe the tests you ran to verify your changes.
 - [ ] I have performed a self-review of my code
 - [ ] I have commented my code where necessary
 - [ ] I have updated the documentation accordingly
-- [ ] My changes generate no new warnings
+- [ ] `pnpm check` passes without warnings
+- [ ] I recorded relevant manual or packaged-app checks, or explained why they do not apply
 - [ ] Any dependent changes have been merged and published

@@ -1,31 +1,115 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Reporting a vulnerability
 
-| Version | Supported          |
-|---------|--------------------|
-| 1.x     | :white_check_mark: |
-| < 1.0   | :x:                |
+Use [GitHub private vulnerability reporting](https://github.com/miikkij/VideoNinja/security/advisories/new)
+if enabled for this repository. Include the affected version, operating system,
+reproduction steps, impact and a proposed fix if available.
 
-## Reporting a Vulnerability
+Do not publish exploit details, cookie files, tokens or private download URLs in
+an ordinary issue. If private reporting is unavailable, ask the maintainer to
+enable a private channel without including sensitive details. There is no
+guaranteed response time or documented support window for historical branches.
 
-If you discover a security vulnerability in VideoNinja, please report it responsibly.
+## Version 1.1 security boundaries
 
-**Do NOT open a public issue for security vulnerabilities.**
+The implementation now uses a sandboxed, context-isolated renderer with Node
+integration disabled. A restricted local resource protocol and Content Security
+Policy limit renderer resources; untrusted values enter the DOM as text.
+Navigation, webviews and new windows are denied.
 
-Instead, please use [GitHub's private vulnerability reporting](https://github.com/miikkij/VideoNinja/security/advisories/new) to submit your report securely.
+A narrow preload API replaces generic renderer IPC access. Main-process commands
+validate the originating window/frame, URL and payload. File actions use completed
+download IDs, check resolved paths against the destination folder and allow only
+regular media files. External navigation is limited to fixed help links.
 
-### What to expect
+Download processes launch without a shell. URLs and options are validated;
+arbitrary extra arguments, plugin directories, user yt-dlp configuration and
+remote-component downloads are disabled. Output/errors are bounded and redacted.
+Cancellation and shutdown wait for process-tree termination. Saved state is
+validated and migrated; malformed configuration is preserved separately rather
+than silently overwritten.
 
-- **Acknowledgment** within 48 hours
-- **Status update** within 5 business days
-- **Coordinated disclosure** after a fix is available
+These boundaries reduce the authority of renderer content. They are not a
+security certification, a sandbox around yt-dlp/ffmpeg, or protection against
+another process running with the user's permissions. See
+[Architecture](docs/ARCHITECTURE.md) for the implemented contracts and
+[Contributing](CONTRIBUTING.md) for verification.
 
-### What to include
+## Dependencies and distribution
 
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
+Keep Electron and the external media tools updated. Audit the whole dependency
+tree as well as production dependencies: Electron is declared as a development
+dependency but ships as the application's runtime.
 
-Thank you for helping keep VideoNinja and its users safe.
+```sh
+pnpm run audit
+# Inspect every advisory, including build-only moderate findings:
+pnpm audit
+pnpm audit --prod
+```
+
+The repository's `audit` script gates high/critical findings in the full tree and
+all findings in production dependencies. Invoke it with **`pnpm run audit`**;
+`pnpm audit` invokes pnpm's built-in command instead.
+
+The local audit reviewed on **2026-10-16** reported no high/critical full-tree
+findings and no production dependency findings. One moderate advisory remains:
+[sprintf-js GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c),
+affecting 1.1.3 with no patched release listed at that review. Untrusted format
+precision can cause a formatter exception. The dependency is in the
+`electron-builder → app-builder-lib → @electron/get → global-agent → roarr`
+build chain.
+
+VideoNinja does not call sprintf-js directly, and the inspected global-agent
+logging sites use fixed message formats with variable data in structured fields.
+This reduces the identified exposure in the present build path; it does not
+establish zero risk. The advisory is not suppressed. Monitor the upstream fix,
+review changes to that call path and rerun audits when dependencies change.
+An audit snapshot does not assess external executables or guarantee the absence
+of undisclosed vulnerabilities.
+
+CI is configured to check Windows, macOS and Linux packages. A configured job is
+not evidence that a specific commit passed; review its actual results. The
+release workflow creates only a draft on matching version tags, and manual
+builds do not create a release. The version 1.1 implementation work has not
+published a public release. Code signing and macOS notarization are not configured,
+and there is no automatic application updater.
+
+## Local data and authentication
+
+Settings and queue/history live in plaintext `config.json` under the Electron
+user-data directory. Saved data can include original video URLs and query
+strings, destination paths, cookie-file paths, browser choices, User-Agent,
+Referer, normalized options and redacted errors. The store is not encrypted.
+Corrupt-file backups retain the original bytes and may contain older secrets.
+
+Cookie files can grant account access. Use only your own authorized session,
+restrict file access, keep files outside the repository and remove them when no
+longer needed. Browser extraction may fail because of locks, permissions or
+encryption. VideoNinja does not automatically retry without cookies after a
+cookie failure.
+
+History export omits local paths, error text and authentication/network options;
+it removes credentials, query strings and fragments from URLs. Titles and URL
+paths remain and can still identify private content. Review exports, copied
+errors and screenshots before sharing. Error redaction is a safeguard, not a
+guarantee that arbitrary upstream diagnostics contain no sensitive information.
+
+Clearing history removes records only. Downloaded/partial media, settings,
+cookie files and corrupt-configuration backups remain. Those files must be
+managed separately by their owner.
+
+## External tools and source content
+
+yt-dlp, ffmpeg/ffprobe and a JavaScript runtime are installed separately and run
+with the user's permissions. Use trusted distributions and keep their
+dependencies current. Executable discovery/version checks do not establish
+provenance or verify that yt-dlp EJS challenge scripts are installed and usable.
+Follow the [official EJS instructions](https://github.com/yt-dlp/yt-dlp/wiki/EJS)
+for that setup.
+
+Downloading or previewing a link contacts the source service through yt-dlp.
+URLs, authentication choices and network options affect what that service sees.
+Download only content you are authorized to save; the application does not
+grant access to restricted accounts or content.

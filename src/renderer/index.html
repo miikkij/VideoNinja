@@ -1,311 +1,463 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VideoNinja - YouTube Downloader</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <div class="container">
-    <!-- Header - click to toggle settings, X to hide -->
-    <header id="header-toggle">
-      <h1><span id="camera-icon" style="cursor: pointer;">🎬</span> VideoNinja <span id="ninja-icon" style="cursor: pointer;">🥷</span></h1>
-      <p class="subtitle">
-        <span>YouTube Video Downloader</span>
-        <span style="opacity: 0.5; font-size: 0.75em; font-weight: 300;">v1.0.0-ninja</span>
-      </p>
-      <button class="close-btn" id="close-btn">✕</button>
-    </header>
-
-    <!-- yt-dlp Not Found Screen -->
-    <div id="ytdlp-missing" class="ytdlp-missing" style="display: none;">
-      <div class="warning-icon">⚠️</div>
-      <h2>yt-dlp Not Found</h2>
-      <p>VideoNinja requires yt-dlp to download videos.</p>
-      
-      <div class="install-instructions">
-        <h3>📦 Installation Instructions</h3>
-        
-        <div class="platform-instructions">
-          <h4>Windows:</h4>
-          <ol>
-            <li>Download yt-dlp.exe from <a href="#" class="link" data-url="https://github.com/yt-dlp/yt-dlp/releases">GitHub Releases</a></li>
-            <li>Place it in a folder (e.g., C:\Program Files\yt-dlp\)</li>
-            <li>Add the folder to your PATH, or</li>
-            <li>Place yt-dlp.exe in the same folder as VideoNinja</li>
-          </ol>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VideoNinja</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="i18n.js" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#download-heading" data-i18n="skip">Skip to downloads</a>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">🥷</span>
+          <div>
+            <h1>VideoNinja <span id="app-version" class="version"></span></h1>
+            <p data-i18n="tagline">Your videos, ready when you are.</p>
+          </div>
         </div>
-        
-        <div class="platform-instructions mac-placeholder">
-          <h4>macOS: (Coming Soon)</h4>
-          <p>macOS support is planned for a future release.</p>
-          <p>For now, you can install yt-dlp via:</p>
-          <code>brew install yt-dlp</code>
-        </div>
-      </div>
-      
-      <button id="retry-ytdlp" class="btn btn-primary">🔄 Check Again</button>
-    </div>
-
-    <!-- Settings Panel -->
-    <div id="settings-panel" class="settings-panel" style="display: none;">
-      <h2>⚙️ Settings</h2>
-      
-      <div class="setting-item">
-        <label>yt-dlp Status:</label>
-        <div class="status-badge status-found" id="ytdlp-badge">
-          <span class="status-icon">✓</span>
-          <span class="status-text" id="ytdlp-status-text">Checking...</span>
-        </div>
-      </div>
-
-      <div class="setting-item">
-        <label>ffmpeg Status:</label>
-        <div class="status-badge status-found" id="ffmpeg-badge">
-          <span class="status-icon">✓</span>
-          <span class="status-text" id="ffmpeg-status-text">Checking...</span>
-        </div>
-      </div>
-
-      <div class="tool-help" id="tool-help" style="display: none;">
-        <div class="tool-help-header">⚠️ Missing Tools</div>
-        <p class="tool-help-desc">VideoNinja needs <strong>yt-dlp</strong> to download videos and <strong>ffmpeg</strong> to merge high-quality streams. Install the missing tools to get the best experience.</p>
-        <div class="tool-help-quick">
-          <strong>Quick install (Windows):</strong>
-          <code>choco install yt-dlp ffmpeg -y</code>
-          <strong>Quick install (macOS):</strong>
-          <code>brew install yt-dlp ffmpeg</code>
-        </div>
-        <details class="tool-help-ai">
-          <summary>🤖 Need help? Copy this prompt to your AI assistant (ChatGPT, Copilot, etc.)</summary>
-          <pre class="ai-prompt" id="ai-help-prompt"></pre>
-          <button class="btn btn-secondary btn-small" id="copy-ai-prompt-btn">📋 Copy to Clipboard</button>
-        </details>
-      </div>
-      
-      <div class="setting-item">
-        <label>Download Folder:</label>
-        <div class="input-with-button">
-          <input type="text" id="download-path" readonly class="input-readonly">
-          <button id="choose-folder-btn" class="btn btn-secondary">📁 Choose</button>
-        </div>
-      </div>
-      
-      <div class="disk-space" id="disk-space" style="display: none;">
-        <span class="disk-space-label">Disk Space:</span>
-        <span class="disk-space-value" id="disk-space-value">--</span>
-      </div>
-      
-      <div class="setting-item">
-        <label>Startup:</label>
-        <button id="startup-toggle-btn" class="btn btn-secondary">⚙️ Loading...</button>
-      </div>
-
-      <hr class="settings-divider">
-      <h3>🍪 Cookie / Authentication</h3>
-      <p class="settings-hint">Required for Instagram, age-restricted YouTube, and login-protected content.</p>
-      
-      <div class="setting-item">
-        <label>Cookie Source:</label>
-        <select id="cookie-source" class="select">
-          <option value="">None (no cookies)</option>
-          <option value="file">Cookie File (most reliable ✅)</option>
-          <option value="chrome">Chrome (close Chrome first!)</option>
-          <option value="edge">Edge (close Edge first!)</option>
-          <option value="brave">Brave</option>
-          <option value="firefox">Firefox</option>
-          <option value="opera">Opera</option>
-          <option value="safari">Safari</option>
-          <option value="chromium">Chromium</option>
-          <option value="vivaldi">Vivaldi</option>
-        </select>
-      </div>
-      
-      <div class="cookie-tips" id="cookie-tips" style="display: none;"></div>
-      
-      <div class="setting-item" id="cookie-file-setting" style="display: none;">
-        <label>Cookie File:</label>
-        <div class="input-with-button">
-          <input type="text" id="cookie-file-path" readonly class="input-readonly" placeholder="Select exported cookies.txt file...">
-          <button id="choose-cookie-file-btn" class="btn btn-secondary">📄 Choose</button>
-        </div>
-      </div>
-
-      <hr class="settings-divider">
-      <h3>🔧 Advanced</h3>
-      
-      <div class="setting-item">
-        <label>JavaScript Runtime:</label>
-        <div class="js-runtime-status" id="js-runtime-status">Detecting...</div>
-        <select id="js-runtime-select" class="select">
-          <option value="auto">Auto-detect (recommended)</option>
-          <option value="node">Node.js</option>
-          <option value="deno">Deno</option>
-          <option value="bun">Bun</option>
-          <option value="quickjs">QuickJS</option>
-        </select>
-        <span class="settings-hint">Required for YouTube. yt-dlp needs a JS runtime to decode YouTube's player.</span>
-      </div>
-      
-      <div class="setting-item">
-        <label>Custom User-Agent:</label>
-        <input type="text" id="custom-user-agent" class="input-url" placeholder="Leave empty for default">
-      </div>
-      
-      <div class="setting-item">
-        <label>Extra yt-dlp Arguments:</label>
-        <input type="text" id="extra-args" class="input-url" placeholder="e.g. --geo-bypass --sleep-interval 5">
-        <span class="settings-hint">Space-separated extra arguments passed to yt-dlp</span>
-      </div>
-    </div>
-
-    <!-- Download Panel -->
-    <div id="download-panel" class="download-panel" style="display: none;">
-      <h2>📥 Download Video</h2>
-      
-      <div class="download-form">
-        <input type="text" id="video-url" placeholder="Paste YouTube URL here..." class="input-url">
-        
-        <div class="download-options">
-          <select id="quality-select" class="select">
-            <option value="">Best Quality (default)</option>
-            <option value="bestvideo[height<=4320]+bestaudio/best">4K (2160p)</option>
-            <option value="bestvideo[height<=2160]+bestaudio/best">1440p</option>
-            <option value="bestvideo[height<=1080]+bestaudio/best">1080p</option>
-            <option value="bestvideo[height<=720]+bestaudio/best">720p</option>
-            <option value="bestvideo[height<=480]+bestaudio/best">480p</option>
-            <option value="bestaudio/best">Audio Only</option>
-          </select>
-          
-          <button id="start-download-btn" class="btn btn-primary">⬇️ Start Download</button>
-        </div>
-        
-        <!-- Per-download advanced options toggle -->
-        <div class="advanced-toggle" id="advanced-toggle">
-          <span class="advanced-toggle-icon" id="advanced-toggle-icon">▶</span> Advanced Options
-        </div>
-        <div class="advanced-options" id="advanced-options" style="display: none;">
-          <div class="adv-option">
-            <label><input type="checkbox" id="adv-override-cookies"> Override cookie source for this download</label>
-            <select id="adv-cookie-source" class="select select-small" disabled>
-              <option value="chrome">Chrome</option>
-              <option value="firefox">Firefox</option>
-              <option value="edge">Edge</option>
-              <option value="brave">Brave</option>
-              <option value="opera">Opera</option>
-              <option value="safari">Safari</option>
+        <div class="header-actions">
+          <div class="language-field">
+            <label for="language" data-i18n="language">Language</label
+            ><select id="language">
+              <option value="en" lang="en">English</option>
+              <option value="fi" lang="fi">Suomi</option>
             </select>
           </div>
-          <div class="adv-option">
-            <label><input type="checkbox" id="adv-force-ipv4"> Force IPv4</label>
+          <button
+            type="button"
+            id="settings-toggle"
+            aria-controls="settings-panel"
+            aria-expanded="false"
+            data-i18n="settings"
+          >
+            Settings
+          </button>
+          <button
+            type="button"
+            id="hide-window"
+            data-i18n="hideWindow"
+            data-i18n-title="hideWindowHint"
+          >
+            Hide
+          </button>
+        </div>
+      </header>
+      <nav class="section-nav" aria-labelledby="navigation-title">
+        <h2 id="navigation-title" class="sr-only" data-i18n="sections">Sections</h2>
+        <a href="#download-heading" data-i18n="addVideos">Download videos</a>
+        <a href="#queue-heading" data-i18n="queue">Queue</a>
+        <a href="#history-heading" data-i18n="history">History</a>
+      </nav>
+      <main>
+        <p id="loading" role="status" data-i18n="loading">Getting ready…</p>
+        <section id="warnings" class="notice is-error" role="alert" hidden>
+          <p id="warnings-message"></p>
+        </section>
+        <section id="disk-alert" class="notice" role="status" hidden>
+          <p id="disk-alert-message"></p>
+        </section>
+        <section id="notice" class="notice" hidden aria-labelledby="notice-message">
+          <p id="notice-message"></p>
+          <button type="button" id="dismiss-notice" data-i18n="dismiss">Dismiss</button>
+        </section>
+        <div
+          id="live-status"
+          class="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></div>
+        <section id="settings-panel" class="panel" hidden aria-labelledby="settings-heading">
+          <div class="section-heading">
+            <h2 id="settings-heading" data-i18n="settings">Settings</h2>
+            <span id="settings-save-status" class="muted" role="status"></span>
+            <button type="button" id="retry-save" hidden data-i18n="retrySave">Retry saving</button>
           </div>
-          <div class="adv-option">
-            <label><input type="checkbox" id="adv-custom-referer"> Custom Referer</label>
-            <input type="text" id="adv-referer" class="input-url input-small" placeholder="https://..." disabled>
+          <p id="setup-hint" class="intro" data-i18n="setupHint">
+            Choose a folder and check the tools below to start your first download.
+          </p>
+          <div class="tool-grid">
+            <div class="tool-card">
+              <h3>yt-dlp</h3>
+              <p id="ytdlp-status"></p>
+              <p id="ytdlp-path" class="tool-path"></p>
+            </div>
+            <div class="tool-card">
+              <h3>ffmpeg</h3>
+              <p id="ffmpeg-status"></p>
+              <p id="ffmpeg-path" class="tool-path"></p>
+            </div>
+            <div class="tool-card">
+              <h3 data-i18n="runtime">JavaScript runtime</h3>
+              <p id="runtime-status"></p>
+            </div>
           </div>
-          <div class="adv-option">
-            <label><input type="checkbox" id="adv-extractor-args"> Extractor Args</label>
-            <input type="text" id="adv-extractor-args-value" class="input-url input-small" placeholder='e.g. youtube:player_client=web' disabled>
+          <div class="tool-actions">
+            <button type="button" id="recheck-tools" data-i18n="recheck">Check tools again</button
+            ><span class="muted" data-i18n="toolHint"
+              >yt-dlp downloads media; ffmpeg combines video and audio. YouTube also needs a
+              supported runtime.</span
+            >
+          </div>
+          <details id="tool-help">
+            <summary data-i18n="installHelp">Installing the download tools</summary>
+            <p data-i18n="installHint">
+              Install yt-dlp, ffmpeg and a supported JavaScript runtime, then check again. The links
+              open in your browser.
+            </p>
+            <ul>
+              <li><a href="https://github.com/yt-dlp/yt-dlp/releases" data-external>yt-dlp</a></li>
+              <li><a href="https://ffmpeg.org/download.html" data-external>ffmpeg</a></li>
+              <li>
+                <a
+                  href="https://github.com/yt-dlp/yt-dlp/wiki/EJS"
+                  data-external
+                  data-i18n="runtimeHelp"
+                  >YouTube runtime setup</a
+                >
+              </li>
+            </ul>
+          </details>
+          <div class="field">
+            <label for="download-path" data-i18n="downloadFolder">Download folder</label>
+            <div class="field-action">
+              <input id="download-path" type="text" readonly /><button
+                type="button"
+                id="choose-folder"
+                data-i18n="chooseFolder"
+              >
+                Choose folder
+              </button>
+            </div>
+            <p id="disk-space" class="hint" role="status"></p>
+          </div>
+          <label class="check-field"
+            ><input type="checkbox" id="startup" /><span data-i18n="startup"
+              >Start VideoNinja when I sign in</span
+            ></label
+          >
+          <details class="settings-advanced">
+            <summary data-i18n="authentication">Authentication and advanced settings</summary>
+            <p class="hint" data-i18n="cookiePrivacy">
+              Cookies can grant access to your account. Use them only when needed and keep exported
+              files private.
+            </p>
+            <div class="settings-grid">
+              <div class="field">
+                <label for="cookie-source" data-i18n="cookieSource">Cookie source</label
+                ><select id="cookie-source">
+                  <option value="" data-i18n="noCookies">No cookies</option>
+                  <option value="file" data-i18n="cookieFile">Cookie file</option>
+                  <option value="chrome">Chrome</option>
+                  <option value="edge">Edge</option>
+                  <option value="firefox">Firefox</option>
+                  <option value="brave">Brave</option>
+                  <option value="opera">Opera</option>
+                  <option value="safari">Safari</option>
+                  <option value="chromium">Chromium</option>
+                  <option value="vivaldi">Vivaldi</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="js-runtime" data-i18n="runtime">JavaScript runtime</label
+                ><select id="js-runtime">
+                  <option value="auto" data-i18n="automatic">Automatic</option>
+                  <option value="deno">Deno</option>
+                  <option value="node">Node.js</option>
+                  <option value="quickjs">QuickJS</option>
+                </select>
+              </div>
+            </div>
+            <div class="field" id="cookie-file-field" hidden>
+              <label for="cookie-file" data-i18n="cookieFile">Cookie file</label>
+              <div class="field-action">
+                <input type="text" id="cookie-file" readonly /><button
+                  type="button"
+                  id="choose-cookie"
+                  data-i18n="chooseFile"
+                >
+                  Choose file
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="user-agent" data-i18n="userAgent">Custom User-Agent</label
+              ><input
+                type="text"
+                id="user-agent"
+                autocomplete="off"
+                data-i18n-placeholder="optional"
+                placeholder="Optional"
+              />
+            </div>
+            <div class="field">
+              <label for="extra-args" data-i18n="extraArgs">Additional download options</label
+              ><input
+                type="text"
+                id="extra-args"
+                autocomplete="off"
+                aria-describedby="extra-args-hint"
+              />
+              <p id="extra-args-hint" class="hint" data-i18n="extraArgsHint">
+                Leave empty for normal downloads. Only supported options are accepted.
+              </p>
+            </div>
+            <p class="hint" data-i18n="privacyHint">
+              History stores video URLs, paths, download options and errors on this device. Clear
+              history below when you no longer need it.
+            </p>
+          </details>
+        </section>
+        <section class="panel download-panel" aria-labelledby="download-heading">
+          <h2 id="download-heading" tabindex="-1" data-i18n="addVideos">Download videos</h2>
+          <p id="readiness" class="hint" role="status"></p>
+          <form id="download-form" novalidate>
+            <div class="field">
+              <label for="video-urls" data-i18n="videoUrls">Video links</label
+              ><textarea
+                id="video-urls"
+                rows="3"
+                spellcheck="false"
+                autocomplete="off"
+                aria-describedby="urls-hint urls-error"
+                data-i18n-placeholder="urlPlaceholder"
+                placeholder="Paste one or more video links"
+              ></textarea>
+              <p id="urls-hint" class="hint" data-i18n="urlsHint">
+                One link per line. Enter adds to the queue; Shift+Enter starts a new line.
+              </p>
+              <p id="urls-error" class="field-error" role="alert" hidden></p>
+            </div>
+            <div class="download-options">
+              <div class="field">
+                <label for="quality" data-i18n="quality">Quality</label
+                ><select id="quality">
+                  <option value="best" data-i18n="qualityBest">Best available</option>
+                  <option value="2160">4K (2160p)</option>
+                  <option value="1440">1440p</option>
+                  <option value="1080">1080p</option>
+                  <option value="720">720p</option>
+                  <option value="480">480p</option>
+                  <option value="audio" data-i18n="qualityAudio">Audio only</option>
+                </select>
+              </div>
+              <div class="field" id="audio-format-field" hidden>
+                <label for="audio-format" data-i18n="audioFormat">Audio format</label>
+                <select id="audio-format">
+                  <option value="original" data-i18n="audioOriginal">Original format</option>
+                  <option value="mp3">MP3</option>
+                  <option value="m4a">M4A</option>
+                  <option value="opus">Opus</option>
+                  <option value="wav">WAV</option>
+                </select>
+              </div>
+              <button type="button" id="preview-button" data-i18n="preview">
+                Preview first link</button
+              ><button type="submit" id="add-downloads" class="primary" data-i18n="addQueue">
+                Add to queue
+              </button>
+            </div>
+            <details class="download-advanced">
+              <summary data-i18n="downloadOptions">Options for these downloads</summary>
+              <div class="settings-grid">
+                <label class="check-field"
+                  ><input type="checkbox" id="force-ipv4" /><span data-i18n="forceIpv4"
+                    >Use IPv4</span
+                  ></label
+                >
+                <div class="field">
+                  <label for="download-cookie-source" data-i18n="cookieSource">Cookie source</label
+                  ><select id="download-cookie-source">
+                    <option value="default" data-i18n="useSettings">Use settings</option>
+                    <option value="" data-i18n="noCookies">No cookies</option>
+                    <option value="file" data-i18n="cookieFile">Cookie file</option>
+                    <option value="chrome">Chrome</option>
+                    <option value="edge">Edge</option>
+                    <option value="firefox">Firefox</option>
+                    <option value="brave">Brave</option>
+                    <option value="opera">Opera</option>
+                    <option value="safari">Safari</option>
+                    <option value="chromium">Chromium</option>
+                    <option value="vivaldi">Vivaldi</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label for="referer" data-i18n="referer">Referring page URL</label
+                ><input
+                  type="url"
+                  id="referer"
+                  autocomplete="off"
+                  data-i18n-placeholder="optional"
+                  placeholder="Optional"
+                />
+              </div>
+              <div class="field">
+                <label for="extractor-args" data-i18n="extractorArgs">Site-specific options</label
+                ><input
+                  type="text"
+                  id="extractor-args"
+                  autocomplete="off"
+                  data-i18n-placeholder="optional"
+                  placeholder="Optional"
+                />
+              </div>
+            </details>
+          </form>
+          <section id="preview-panel" class="preview" hidden aria-labelledby="preview-title">
+            <h3 id="preview-title"></h3>
+            <p id="preview-description"></p>
+            <p id="preview-url" class="url-text"></p>
+          </section>
+        </section>
+        <section class="panel" aria-labelledby="queue-heading">
+          <div class="section-heading">
+            <h2 id="queue-heading" tabindex="-1" data-i18n="queue">Queue</h2>
+            <span id="queue-count" class="count"></span>
+          </div>
+          <p id="queue-empty" class="empty" data-i18n="queueEmpty">
+            Your queue is empty. Add a video link above.
+          </p>
+          <ol id="queue-list" class="download-list"></ol>
+        </section>
+        <section class="panel" aria-labelledby="history-heading">
+          <div class="section-heading">
+            <h2 id="history-heading" tabindex="-1" data-i18n="history">History</h2>
+            <div class="history-actions">
+              <button type="button" id="export-history" data-i18n="exportHistory">Export</button
+              ><button type="button" id="clear-history" data-i18n="clearHistory">
+                Clear history
+              </button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="history-search" data-i18n="searchHistory">Search history</label
+            ><input
+              type="search"
+              id="history-search"
+              autocomplete="off"
+              aria-controls="history-list"
+            />
+          </div>
+          <p id="history-empty" class="empty" data-i18n="historyEmpty">
+            Finished downloads appear here.
+          </p>
+          <ol id="history-list" class="download-list"></ol>
+        </section>
+      </main>
+      <footer>
+        <p data-i18n="footer">
+          Download only content you have permission to save. Close hides the window; Quit in the
+          tray menu exits the app.
+        </p>
+      </footer>
+    </div>
+    <dialog id="retry-dialog" aria-labelledby="retry-heading" aria-describedby="retry-description">
+      <form id="retry-form" novalidate>
+        <div class="section-heading">
+          <h2 id="retry-heading" data-i18n="retryOptions">Retry with options</h2>
+          <button type="button" id="close-retry" data-i18n="close">Close</button>
+        </div>
+        <p id="retry-description" data-i18n="retryDescription">
+          Review the settings for this attempt. The original entry stays in history.
+        </p>
+        <p id="retry-title" class="url-text"></p>
+        <pre id="retry-original-error" class="error-detail"></pre>
+        <div class="field">
+          <label for="retry-quality" data-i18n="quality">Quality</label
+          ><select id="retry-quality">
+            <option value="best" data-i18n="qualityBest">Best available</option>
+            <option value="2160">4K (2160p)</option>
+            <option value="1440">1440p</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+            <option value="480">480p</option>
+            <option value="audio" data-i18n="qualityAudio">Audio only</option>
+          </select>
+        </div>
+        <div class="field" id="retry-audio-format-field" hidden>
+          <label for="retry-audio-format" data-i18n="audioFormat">Audio format</label>
+          <select id="retry-audio-format">
+            <option value="original" data-i18n="audioOriginal">Original format</option>
+            <option value="mp3">MP3</option>
+            <option value="m4a">M4A</option>
+            <option value="opus">Opus</option>
+            <option value="wav">WAV</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="retry-cookie-source" data-i18n="cookieSource">Cookie source</label
+          ><select id="retry-cookie-source">
+            <option value="" data-i18n="noCookies">No cookies</option>
+            <option value="file" data-i18n="cookieFile">Cookie file</option>
+            <option value="chrome">Chrome</option>
+            <option value="edge">Edge</option>
+            <option value="firefox">Firefox</option>
+            <option value="brave">Brave</option>
+            <option value="opera">Opera</option>
+            <option value="safari">Safari</option>
+            <option value="chromium">Chromium</option>
+            <option value="vivaldi">Vivaldi</option>
+          </select>
+        </div>
+        <div class="field" id="retry-cookie-field" hidden>
+          <label for="retry-cookie-file" data-i18n="cookieFile">Cookie file</label>
+          <div class="field-action">
+            <input id="retry-cookie-file" readonly /><button
+              type="button"
+              id="retry-choose-cookie"
+              data-i18n="chooseFile"
+            >
+              Choose file
+            </button>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- Download Queue & History -->
-    <div id="downloads-list" class="downloads-list" style="display: none;">
-      <h2>📋 Downloads</h2>
-      <div id="downloads-container" class="downloads-container">
-        <!-- Downloads will be inserted here -->
-      </div>
-    </div>
-
-    <div class="loading" id="loading">
-      <div class="spinner"></div>
-      <p>Initializing...</p>
-    </div>
-  </div>
-
-  <!-- Retry With Options Modal -->
-  <div class="modal-overlay" id="retry-modal" style="display: none;">
-    <div class="modal">
-      <div class="modal-header">
-        <h3>🔄 Retry with Special Options</h3>
-        <button class="modal-close" id="retry-modal-close">✕</button>
-      </div>
-      <div class="modal-body">
-        <p class="modal-hint">Select strategies to overcome download failures:</p>
-        <div class="retry-url" id="retry-url"></div>
-        <div class="retry-error" id="retry-error"></div>
-        
-        <div class="retry-strategies">
-          <div class="strategy-group">
-            <h4>🍪 Authentication</h4>
-            <label class="strategy-option">
-              <input type="checkbox" id="retry-use-cookies" checked>
-              <span>Use browser cookies</span>
-              <select id="retry-cookie-browser" class="select select-small">
-                <option value="chrome">Chrome (close it first!)</option>
-                <option value="edge">Edge (close it first!)</option>
-                <option value="brave">Brave</option>
-                <option value="firefox">Firefox</option>
-                <option value="opera">Opera</option>
-                <option value="safari">Safari</option>
-              </select>
-            </label>
-            <div class="strategy-hint" id="retry-cookie-hint"></div>
-          </div>
-          
-          <div class="strategy-group">
-            <h4>🌐 Network</h4>
-            <label class="strategy-option">
-              <input type="checkbox" id="retry-force-ipv4">
-              <span>Force IPv4</span>
-            </label>
-            <label class="strategy-option">
-              <input type="checkbox" id="retry-custom-ua">
-              <span>Custom User-Agent</span>
-              <input type="text" id="retry-ua-value" class="input-url input-small" placeholder="Mozilla/5.0 ..." disabled>
-            </label>
-            <label class="strategy-option">
-              <input type="checkbox" id="retry-referer">
-              <span>Set Referer</span>
-              <input type="text" id="retry-referer-value" class="input-url input-small" placeholder="https://..." disabled>
-            </label>
-          </div>
-          
-          <div class="strategy-group">
-            <h4>⚙️ Extractor</h4>
-            <label class="strategy-option">
-              <input type="checkbox" id="retry-js-runtime">
-              <span>JS Runtime</span>
-              <select id="retry-js-runtime-value" class="select select-small" disabled>
-                <option value="node">Node.js</option>
-                <option value="deno">Deno</option>
-                <option value="bun">Bun</option>
-                <option value="quickjs">QuickJS</option>
-              </select>
-            </label>
-            <label class="strategy-option">
-              <input type="checkbox" id="retry-extractor-args">
-              <span>Extractor Args</span>
-              <input type="text" id="retry-extractor-value" class="input-url input-small" placeholder='youtube:player_client=web' disabled>
-            </label>
-            <label class="strategy-option">
-              <input type="checkbox" id="retry-extra-args">
-              <span>Extra Arguments</span>
-              <input type="text" id="retry-extra-value" class="input-url input-small" placeholder="--geo-bypass --sleep-interval 3" disabled>
-            </label>
-          </div>
+        <div class="field">
+          <label for="retry-runtime" data-i18n="runtime">JavaScript runtime</label
+          ><select id="retry-runtime">
+            <option value="auto" data-i18n="automatic">Automatic</option>
+            <option value="deno">Deno</option>
+            <option value="node">Node.js</option>
+            <option value="quickjs">QuickJS</option>
+          </select>
         </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" id="retry-modal-cancel">Cancel</button>
-        <button class="btn btn-primary" id="retry-modal-go">🔄 Retry Download</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="app.js"></script>
-</body>
+        <label class="check-field"
+          ><input type="checkbox" id="retry-ipv4" /><span data-i18n="forceIpv4"
+            >Use IPv4</span
+          ></label
+        >
+        <div class="field">
+          <label for="retry-user-agent" data-i18n="userAgent">Custom User-Agent</label
+          ><input id="retry-user-agent" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="retry-referer" data-i18n="referer">Referring page URL</label
+          ><input id="retry-referer" type="url" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="retry-extractor" data-i18n="extractorArgs">Site-specific options</label
+          ><input id="retry-extractor" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="retry-extra" data-i18n="extraArgs">Additional download options</label
+          ><input id="retry-extra" autocomplete="off" />
+        </div>
+        <p id="retry-error" class="field-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="cancel-retry" data-i18n="cancel">Cancel</button
+          ><button type="submit" id="submit-retry" class="primary" data-i18n="retry">
+            Retry download
+          </button>
+        </div>
+      </form>
+    </dialog>
+  </body>
 </html>
