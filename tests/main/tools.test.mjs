@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import toolsModule from '../../src/main/tools.js';
 
 const { createToolService } = toolsModule;
@@ -24,6 +26,62 @@ function serviceWith(files, platform = 'win32') {
 }
 
 describe('resolved executable discovery', () => {
+  it('waits for every parallel probe before propagating an abort', async () => {
+    let finishSecond;
+    let settled = false;
+    const failure = Object.assign(new Error('cancelled'), { name: 'AbortError' });
+    const pending = toolsModule
+      .settleProbes([
+        Promise.reject(failure),
+        new Promise((resolve) => {
+          finishSecond = resolve;
+        }),
+      ])
+      .catch((error) => {
+        settled = true;
+        return error;
+      });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    finishSecond({ available: false });
+    expect(await pending).toBe(failure);
+  });
+  it('waits for an actual cancelled Node probe to close before discovery rejects', async () => {
+    const execute = promisify(execFile);
+    const controller = new AbortController();
+    let child;
+    let closed = false;
+    const service = createToolService({
+      env: { PATH: '' },
+      execPath: process.execPath,
+      execFile: (...args) => {
+        const probe = execute(...args);
+        child = probe.child;
+        child.once('close', () => {
+          closed = true;
+        });
+        return probe;
+      },
+    });
+    const pending = service
+      .discover(
+        'node',
+        ['-e', 'setInterval(() => {}, 1000)'],
+        () => 'fixture',
+        () => true,
+        { signal: controller.signal },
+      )
+      .catch((error) => error);
+    try {
+      await vi.waitFor(() => expect(child?.pid).toBeGreaterThan(0));
+      controller.abort();
+      expect((await pending).name).toBe('AbortError');
+      expect(closed).toBe(true);
+    } finally {
+      controller.abort();
+      if (child && !closed) child.kill();
+    }
+  });
   it('searches the executable directory and absolute PATH entries without cwd or shell wrappers', () => {
     const { service } = serviceWith({});
     const candidates = service.candidates('yt-dlp');

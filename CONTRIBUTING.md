@@ -79,6 +79,8 @@ launch real Electron, create an isolated temporary profile, exercise first-run
 setup and language persistence, then restore 500 paused jobs and 100 history
 entries. They check the sandbox, rejected IPC requests, text-only rendering,
 history search, retry dialog focus, reorder, reload and layout at 200% zoom.
+Playlist selection and the saved concurrency setting are exercised through real
+IPC and queue code with a controlled external-tool boundary.
 Screenshots are written to the ignored `test-results/` directory. These checks do
 not download internet content or test OS installer/uninstaller behavior.
 

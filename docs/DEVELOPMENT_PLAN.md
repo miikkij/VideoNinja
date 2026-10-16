@@ -106,13 +106,15 @@ audit-asetuksissa. Koko puun high/critical ja kaikki tuotantolöydökset pysäyt
 
 ## Varmennusnäyttö
 
-- `pnpm check`: 204 testiä, 11 tiedostoa; lintissä ei virheitä eikä varoituksia.
+- `pnpm check`: 208 testiä, 11 tiedostoa; lintissä ei virheitä eikä varoituksia.
 - `pnpm run audit`: läpäisee yllä kuvatulla yhdellä moderate-tiedotteella.
 - `pnpm test:smoke`: oikea Electron 44.8, erillinen profiili, tyhjä ensikäynnistys,
   kielenvaihto, reload, IPC-rajat, tekstirenderöinti, 500 tauotettua työtä,
   100 historiariviä, kohdistus, järjestys ja 200 % reflow. Uusi soittolistakulku
   käyttää oikeaa IPC:tä ja jonoa rajatulla testityökalusovittimella; rinnakkaisuus
-  tallentuu asetuksiin.
+  tallentuu asetuksiin. Viivästettyjen työkalutarkistusten aikana valmistuneen
+  työn alkutila pysyy ajantasaisena. Lopetus odottaa kaikkien työkalutarkistusten
+  ja aktiivisen latauksen siivouksen ennen jonon tallennusta ja poistumista.
 - `pnpm test:media`: paikallisesti generoitu video ja localhost-palvelin.
   Metatiedot, progressiivinen lataus, saman tiedoston uusintalataus muuttamatta
   sisältöä tai mtimea, DASH-yhdistäminen, ääni ja MP3. Lisäksi oman soittolistan

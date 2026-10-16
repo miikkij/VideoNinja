@@ -232,7 +232,7 @@ function createDownloader(deps = {}) {
 
   async function getTools(signal) {
     if (signal?.aborted) throw abortError();
-    const [ytdlpInfo, ffmpegInfo] = await Promise.all([
+    const [ytdlpInfo, ffmpegInfo] = await tools.settleProbes([
       toolService.checkYtDlpAvailability({ signal }),
       toolService.checkFfmpegAvailability({ signal }),
     ]);

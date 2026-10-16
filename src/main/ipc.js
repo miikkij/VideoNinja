@@ -40,6 +40,9 @@ function id(value) {
   return value;
 }
 
+// Validated URLs are canonical; fragments do not identify separate downloads.
+const batchSize = (urls) => new Set(urls.map((url) => url.split('#', 1)[0])).size;
+
 /** Only the application's top-level renderer can call native commands. */
 function trustedSender(event, window) {
   return Boolean(
@@ -266,8 +269,8 @@ function createHandlers(deps) {
       const urls = input.urls.map(asUrl);
       const options = asOptions(input.options);
       const folder = await requireFolder();
-      if (queue.getQueueState().queue.length + urls.length > MAX_QUEUE_ITEMS)
-        throw new UserError('The queue is full.');
+      if (queue.getQueueState().queue.length + batchSize(urls) > MAX_QUEUE_ITEMS)
+        throw new UserError('The queue is full.', 'QUEUE_FULL');
       return queue.addBatch(urls, folder, options);
     },
     cancelDownload: (value) => changeJob('cancelDownload', value),
@@ -466,7 +469,7 @@ function createHandlers(deps) {
         throw new UserError('Preview the playlist again before adding it.', 'PLAYLIST_EXPIRED');
       }
       const urls = [...new Set(entries.map((entry) => entry.url))];
-      if (queue.getQueueState().queue.length + urls.length > MAX_QUEUE_ITEMS) {
+      if (queue.getQueueState().queue.length + batchSize(urls) > MAX_QUEUE_ITEMS) {
         throw new UserError(
           'The queue is full. Choose fewer entries or wait for downloads to finish.',
           'QUEUE_FULL',

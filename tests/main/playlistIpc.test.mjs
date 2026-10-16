@@ -95,6 +95,25 @@ describe('playlist native commands', () => {
       handlers.addPlaylistSelection({ previewId: preview.previewId, indices: [1] }),
     ).resolves.toEqual(['job-0']);
   });
+  it.each(['ordinary', 'playlist'])(
+    'counts unique resources at capacity for %s batches',
+    async (mode) => {
+      const urls = ['https://example.test/a#first', 'https://example.test/a#second'];
+      const { handlers, queue } = fixture(async () => ({
+        entries: urls.map((url, index) => ({ id: String(index), url, available: true })),
+      }));
+      queue.getQueueState.mockReturnValue({ queue: Array(499).fill({}) });
+      if (mode === 'ordinary') {
+        await handlers.addDownloads({ urls });
+      } else {
+        const preview = await handlers.previewPlaylist({ url: 'https://example.test/list' });
+        await handlers.addPlaylistSelection({ previewId: preview.previewId, indices: [1, 2] });
+      }
+      expect(queue.addBatch).toHaveBeenCalledWith(urls, path.resolve('test-media'), {
+        quality: 'best',
+      });
+    },
+  );
   it('expires previews after fifteen minutes', async () => {
     const { handlers } = fixture();
     const preview = await handlers.previewPlaylist({ url: 'https://example.test/list' });

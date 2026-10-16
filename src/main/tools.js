@@ -12,6 +12,13 @@ const SAFE_YTDLP_FLAGS = Object.freeze([
   '--no-remote-components',
 ]);
 
+async function settleProbes(probes) {
+  const results = await Promise.allSettled(probes);
+  const failure = results.find((result) => result.status === 'rejected');
+  if (failure) throw failure.reason;
+  return results.map((result) => result.value);
+}
+
 function createToolService(deps = {}) {
   const platform = deps.platform || process.platform;
   const paths = platform === 'win32' ? path.win32 : path.posix;
@@ -66,7 +73,7 @@ function createToolService(deps = {}) {
         if (platform !== 'win32') await fileSystem.access(resolved, 1);
         let output;
         try {
-          output = await execute(resolved, args, {
+          const probe = execute(resolved, args, {
             shell: false,
             windowsHide: true,
             timeout: 5000,
@@ -74,6 +81,16 @@ function createToolService(deps = {}) {
             cwd: paths.dirname(resolved),
             signal,
           });
+          // execFile reports abort before its child necessarily closes. Keep the
+          // owning queue/preview alive until the actual subprocess has settled.
+          const closed = probe.child
+            ? new Promise((resolve) => probe.child.once('close', resolve))
+            : Promise.resolve();
+          try {
+            output = await probe;
+          } finally {
+            await closed;
+          }
         } catch (error) {
           // Bellard QuickJS prints its version through --help and deliberately exits 1.
           // Only that normal exit is accepted; timeouts, aborts and signals still fail.
@@ -140,7 +157,7 @@ function createToolService(deps = {}) {
             : /^\d+\.\d+/u.test(version),
       ],
     ];
-    const checks = await Promise.all(
+    const checks = await settleProbes(
       definitions.map(async ([name, executable, args, parse, supported]) => ({
         name,
         ...(await discover(executable, args, parse, supported, {
@@ -153,7 +170,7 @@ function createToolService(deps = {}) {
   }
 
   async function checkYtDlpAvailability({ signal } = {}) {
-    const [tool, runtimeChecks] = await Promise.all([
+    const [tool, runtimeChecks] = await settleProbes([
       discover(
         'yt-dlp',
         [...SAFE_YTDLP_FLAGS, '--version'],
@@ -182,4 +199,4 @@ function createToolService(deps = {}) {
   return { candidates, discover, checkJsRuntimes, checkYtDlpAvailability, checkFfmpegAvailability };
 }
 
-module.exports = { createToolService, SAFE_YTDLP_FLAGS, ...createToolService() };
+module.exports = { createToolService, SAFE_YTDLP_FLAGS, settleProbes, ...createToolService() };

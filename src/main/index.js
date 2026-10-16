@@ -64,6 +64,7 @@ let persistence;
 let services;
 let diskTimer;
 let toolCheck;
+let toolController;
 let quitting = false;
 let quitAllowed = false;
 let warnings = [];
@@ -85,12 +86,18 @@ function warn(code) {
 }
 
 async function recheckTools() {
+  if (quitting) throw new Error('The application is shutting down.');
   if (toolCheck) return toolCheck;
+  const controller = new AbortController();
+  toolController = controller;
   toolCheck = (async () => {
-    const [ytdlp, ffmpeg] = await Promise.all([
-      tools.checkYtDlpAvailability({ refresh: true }),
-      tools.checkFfmpegAvailability({ refresh: true }),
+    const results = await Promise.allSettled([
+      tools.checkYtDlpAvailability({ signal: controller.signal }),
+      tools.checkFfmpegAvailability({ signal: controller.signal }),
     ]);
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
+    const [ytdlp, ffmpeg] = results.map((result) => result.value);
     toolState = { ytdlp, ffmpeg };
     send('tools', toolState);
     return toolState;
@@ -99,6 +106,7 @@ async function recheckTools() {
     return await toolCheck;
   } finally {
     toolCheck = null;
+    if (toolController === controller) toolController = null;
   }
 }
 
@@ -269,15 +277,23 @@ async function initialize() {
       await checkDisk();
     },
     recheckTools,
-    getInitialState: async () => ({
-      version: app.getVersion(),
-      settings,
-      queue: queue.getQueueState(),
-      tools: await (toolCheck || Promise.resolve(toolState)),
-      diskSpace: diskState,
-      startupEnabled: await startup.isEnabled().catch(() => false),
-      warnings,
-    }),
+    getInitialState: async () => {
+      const [currentTools, startupEnabled] = await Promise.all([
+        toolCheck || Promise.resolve(toolState),
+        startup.isEnabled().catch(() => false),
+      ]);
+      // Queue transitions can happen during native checks. Snapshot only once
+      // those checks have finished so initial rendering cannot replay old jobs.
+      return {
+        version: app.getVersion(),
+        settings,
+        queue: queue.getQueueState(),
+        tools: currentTools,
+        diskSpace: diskState,
+        startupEnabled,
+        warnings,
+      };
+    },
   });
   registerIpc(ipcMain, () => mainWindow, services.handlers);
   queue.on('queue-updated', (value) => {
@@ -299,6 +315,7 @@ async function initialize() {
   queue.setConcurrency(settings.maxConcurrent, { start: false });
   queue.processNext();
   void recheckTools().catch(() => {
+    if (quitting) return;
     warn('TOOL_CHECK_FAILED');
     toolState = { ytdlp: { available: false, jsRuntimes: [] }, ffmpeg: { available: false } };
     send('tools', toolState);
@@ -327,7 +344,9 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting) return;
     quitting = true;
     clearInterval(diskTimer);
-    Promise.all([services?.dispose(), queue.shutdown()])
+    const pendingToolCheck = toolCheck;
+    toolController?.abort();
+    Promise.all([services?.dispose(), queue.shutdown(), pendingToolCheck?.catch(() => {})])
       .then(() => persistence.checkpoint())
       .catch(() => {
         // Do not print persisted URLs/options or process output.

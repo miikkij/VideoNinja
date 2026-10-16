@@ -204,13 +204,131 @@ try {
   await page.waitForFunction(
     async () => (await window.videoNinja.getInitialState()).data.settings.language === 'fi',
   );
+
+  // Native checks can outlive queue transitions. The eventual initial snapshot
+  // must include jobs completed while it was waiting for tool availability.
+  await application.evaluate(({ app }) => {
+    const adapter = process.mainModule.require(app.getAppPath() + '/src/main/ytdlp.js');
+    globalThis.smokeCheckReleases = [];
+    const delayed = () =>
+      new Promise((resolve) => {
+        globalThis.smokeCheckReleases.push(() =>
+          resolve({
+            available: true,
+            path: 'fixture',
+            version: 'delayed fixture',
+            jsRuntimes: [],
+          }),
+        );
+      });
+    adapter.checkYtDlpAvailability = delayed;
+    adapter.checkFfmpegAvailability = delayed;
+  });
+  const checking = page.evaluate(() => window.videoNinja.recheckTools());
+  await application.evaluate(async () => {
+    const deadline = Date.now() + 5000;
+    while (globalThis.smokeCheckReleases.length < 2 && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    if (globalThis.smokeCheckReleases.length !== 2) throw new Error('Tool checks did not start.');
+  });
+  const initialDuringCheck = page.evaluate(() => window.videoNinja.getInitialState());
+  const freshJob = await page.evaluate(() =>
+    window.videoNinja.addDownloads({
+      urls: ['https://example.invalid/initial-snapshot'],
+      options: {},
+    }),
+  );
+  assert.equal(freshJob.ok, true);
+  await page.waitForFunction(() => document.querySelectorAll('#history-list > li').length === 3);
+  await application.evaluate(() => globalThis.smokeCheckReleases.forEach((release) => release()));
+  assert.equal((await checking).ok, true);
+  const freshState = await initialDuringCheck;
+  assert.equal(freshState.ok, true);
+  assert.equal(
+    freshState.data.queue.history.some(
+      (job) => job.id === freshJob.data[0] && job.status === 'completed',
+    ),
+    true,
+    'Initial state reflects queue changes that completed during delayed tool checks.',
+  );
+
+  // Both tool probes and an active queue job reject/settle only after delayed
+  // cancellation cleanup. Quit must wait for all three before its checkpoint.
+  await application.evaluate(({ app }, fixtureRoot) => {
+    const adapter = process.mainModule.require(app.getAppPath() + '/src/main/ytdlp.js');
+    const filesystem = process.mainModule.require('node:fs/promises');
+    const paths = process.mainModule.require('node:path');
+    globalThis.smokeAbortProbeCount = 0;
+    globalThis.smokeShutdownDownloadStarted = false;
+    const probe =
+      (name, delay) =>
+      ({ signal } = {}) =>
+        new Promise((resolve, reject) => {
+          globalThis.smokeAbortProbeCount++;
+          if (!signal) {
+            reject(new Error('Tool probes require a shutdown signal.'));
+            return;
+          }
+          const abort = () =>
+            setTimeout(() => {
+              filesystem.writeFile(paths.join(fixtureRoot, name), 'settled').then(() => {
+                reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
+              }, reject);
+            }, delay);
+          signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+        });
+    adapter.checkYtDlpAvailability = probe('ytdlp-probe-settled', 30);
+    adapter.checkFfmpegAvailability = probe('ffmpeg-probe-settled', 150);
+    adapter.downloadVideo = (_url, _folder, _options, _progress, { signal }) =>
+      new Promise((resolve, reject) => {
+        globalThis.smokeShutdownDownloadStarted = true;
+        const abort = () =>
+          setTimeout(() => {
+            filesystem
+              .writeFile(paths.join(fixtureRoot, 'download-settled'), 'settled')
+              .then(() => {
+                resolve({ success: false, filepath: null, error: 'cancelled' });
+              }, reject);
+          }, 75);
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+      });
+  }, temporary);
+  const shutdownJob = await page.evaluate(() =>
+    window.videoNinja.addDownloads({
+      urls: ['https://example.invalid/shutdown-pending'],
+      options: {},
+    }),
+  );
+  assert.equal(shutdownJob.ok, true);
+  await page.evaluate(() => {
+    void window.videoNinja.recheckTools();
+  });
+  await application.evaluate(async () => {
+    const deadline = Date.now() + 5000;
+    while (
+      (!globalThis.smokeShutdownDownloadStarted || globalThis.smokeAbortProbeCount < 2) &&
+      Date.now() < deadline
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    if (!globalThis.smokeShutdownDownloadStarted || globalThis.smokeAbortProbeCount !== 2)
+      throw new Error('Shutdown fixtures did not start.');
+  });
   await close();
+  for (const marker of ['ytdlp-probe-settled', 'ffmpeg-probe-settled', 'download-settled'])
+    assert.equal(await fs.readFile(path.join(temporary, marker), 'utf8'), 'settled');
 
   const configFile = path.join(profile, 'config.json');
   const config = JSON.parse(await fs.readFile(configFile, 'utf8'));
   assert.equal(config.settings.downloadPath, downloads);
   assert.equal(config.settings.language, 'fi');
   assert.equal(config.settings.maxConcurrent, 3);
+  assert.equal(
+    config.queueState.queue.find((job) => job.id === shutdownJob.data[0])?.status,
+    'pending',
+    'Quitting during rejected tool checks still checkpoints active work for restart.',
+  );
   const hostile = '<img src=x onerror="window.injected=true">';
   const job = (id, status) => ({
     id,
@@ -306,7 +424,7 @@ try {
   await close();
   assert.deepEqual(errors, [], 'Renderer has no uncaught errors.');
   console.log(
-    `${mode} Electron smoke passed: sandbox, setup, IPC, languages, 500 queued jobs, 100 history entries, focus, reload, persistence and 200% layout.`,
+    `${mode} Electron smoke passed: sandbox, setup, IPC, languages, 500 queued jobs, 100 history entries, fresh initial snapshots, awaited tool/download shutdown, focus, reload, persistence and 200% layout.`,
   );
 } finally {
   await close();
