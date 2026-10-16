@@ -177,6 +177,18 @@ distribution. There is no automatic application updater.
 
 ## Artwork maintenance
 
+Refresh the README screenshots from the current application with:
+
+```sh
+node scripts/capture-screenshots.mjs
+```
+
+The script launches real Electron with an isolated temporary profile and sample
+tool/playlist/progress data. It captures the unmodified interface into
+`docs/screenshots/`; it does not access the normal profile or download media.
+Review all four images before committing them. On headless Linux, use the same
+display and sandbox setup as the Electron smoke test.
+
 ```sh
 node scripts/generate-icons.js
 node scripts/convert-icons-to-png.js

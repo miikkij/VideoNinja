@@ -11,6 +11,45 @@ stay on your computer.
 This README describes the **1.1.0 source**. Check [Releases](https://github.com/miikkij/VideoNinja/releases)
 for published binaries; a source version bump does not publish a release.
 
+## Screenshots
+
+The actual VideoNinja 1.1.0 interface on Windows, shown with sample data.
+Click an image to open it at full size.
+
+**Paste links, choose a quality and start downloading.**
+
+[![VideoNinja main window in English with video links, quality selection and playlist controls](docs/screenshots/overview-en.png)](docs/screenshots/overview-en.png)
+
+<details>
+<summary>Parallel downloads and queue controls</summary>
+
+Follow each download's progress, speed and remaining time. Pause, resume or cancel
+individual jobs while other downloads continue.
+
+[![Download queue with two active downloads and one paused job, with progress and individual controls](docs/screenshots/queue-en.png)](docs/screenshots/queue-en.png)
+
+</details>
+
+<details>
+<summary>Choose individual videos from a playlist</summary>
+
+Inspect the playlist before adding jobs. Select only the videos you want;
+unavailable entries stay visible and cannot be selected.
+
+[![Playlist preview with three selected videos, an unselected video and one unavailable entry](docs/screenshots/playlist-en.png)](docs/screenshots/playlist-en.png)
+
+</details>
+
+<details>
+<summary>Suomenkieliset asetukset / Finnish settings</summary>
+
+Switch between English and Finnish, check the download tools, choose a folder and
+set the maximum number of simultaneous downloads.
+
+[![Finnish settings showing download tools, destination folder, disk space and three simultaneous downloads](docs/screenshots/settings-fi.png)](docs/screenshots/settings-fi.png)
+
+</details>
+
 ## Start here
 
 - [Quick start](QUICK_START.md) / [Pikaohje suomeksi](QUICK_START.fi.md)
