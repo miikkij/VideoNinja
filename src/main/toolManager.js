@@ -4,11 +4,14 @@ const { createHash } = require('node:crypto');
 const { inflateRawSync } = require('node:zlib');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { setTimeout: delay } = require('node:timers/promises');
 const { runProcess, abortError } = require('./processRunner');
 const { createToolService, SAFE_YTDLP_FLAGS, settleProbes } = require('./tools');
 
 const MAX_DOWNLOAD = 300 * 1024 * 1024;
 const MAX_EXECUTABLE = 250 * 1024 * 1024;
+const WINDOWS_RENAME_DELAYS = [100, 200, 400, 800, 1000, 1000, 1000];
+const TRANSIENT_RENAME_ERRORS = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const HOSTS = new Set([
   'api.github.com',
   'github.com',
@@ -136,11 +139,33 @@ function createToolManager(deps = {}) {
     request = deps.fetch || globalThis.fetch;
   const execute = deps.runProcess || runProcess,
     executeFile = deps.execFile || promisify(execFile);
+  const waitForRename =
+    deps.waitForRename || ((milliseconds, signal) => delay(milliseconds, undefined, { signal }));
   const managedDir = deps.managedDir;
   if (typeof managedDir !== 'string' || !path.isAbsolute(managedDir))
     throw new Error('An absolute managed tools directory is required.');
   const service = deps.tools || createToolService({ managedDir, platform });
   let installing = false;
+
+  async function renameWithRetry(from, to, signal) {
+    for (let attempt = 0; ; attempt++) {
+      if (signal?.aborted) throw abortError();
+      try {
+        await fileSystem.rename(from, to);
+        return;
+      } catch (error) {
+        if (signal?.aborted) throw abortError();
+        if (
+          platform !== 'win32' ||
+          !TRANSIENT_RENAME_ERRORS.has(error.code) ||
+          attempt >= WINDOWS_RENAME_DELAYS.length
+        )
+          throw error;
+        // Probed executables can remain briefly locked by Windows/antivirus.
+        await waitForRename(WINDOWS_RENAME_DELAYS[attempt], signal);
+      }
+    }
+  }
 
   async function cleanupTemporary(temporary, tool) {
     const realRoot = await fileSystem.realpath(managedDir);
@@ -407,16 +432,17 @@ function createToolManager(deps = {}) {
         const existing = await fileSystem.lstat(destination);
         if (!existing.isDirectory() || existing.isSymbolicLink())
           throw new Error('The managed tool destination is not a regular directory.');
-        await fileSystem.rename(destination, backup);
+        await renameWithRetry(destination, backup, activeSignal);
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
       try {
-        await fileSystem.rename(staged, destination);
+        await renameWithRetry(staged, destination, activeSignal);
         switched = true;
       } catch (error) {
         try {
-          await fileSystem.rename(backup, destination);
+          // Restoring the previous version must finish even after installation aborts.
+          await renameWithRetry(backup, destination);
         } catch (rollbackError) {
           if (rollbackError.code !== 'ENOENT') {
             temporary = null;

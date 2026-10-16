@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import managerModule from '../../src/main/toolManager.js';
 
 const { createToolManager, readZipExecutables, checksumFor } = managerModule;
@@ -56,6 +57,7 @@ async function setup({
   checksum,
   fsOverride,
   runProcess,
+  waitForRename,
 } = {}) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'videoninja-manager-test-'));
   directories.push(temporary);
@@ -72,7 +74,13 @@ async function setup({
       ? 'deno-x86_64-pc-windows-msvc.zip'
       : tool === 'ffmpeg'
         ? 'ffmpeg-master-latest-win64-gpl.zip'
-        : 'yt-dlp.exe';
+        : platform === 'win32'
+          ? 'yt-dlp.exe'
+          : platform === 'darwin'
+            ? 'yt-dlp_macos'
+            : arch === 'arm64'
+              ? 'yt-dlp_linux_aarch64'
+              : 'yt-dlp_linux';
   const manifest =
     tool === 'runtime'
       ? `${filename}.sha256sum`
@@ -104,6 +112,7 @@ async function setup({
     arch,
     fetch: request,
     runProcess: execute,
+    waitForRename,
     fs: fsOverride ? { ...fs, ...fsOverride } : fs,
   });
   return { manager, managedDir, temporary, request, execute, responses, base, filename, hash };
@@ -156,6 +165,170 @@ describe('managed tool installation', () => {
     await expect(fixture.manager.installYtDlp()).rejects.toThrow('locked');
     expect(await fs.readFile(path.join(previous, 'yt-dlp.exe'), 'utf8')).toBe('old');
     expect(await fs.readdir(fixture.managedDir)).toEqual(['yt-dlp']);
+  });
+  it('retries transient Windows locks for both previous and staged tool directories', async () => {
+    const failures = {
+      'yt-dlp': ['EACCES'],
+      ready: ['EPERM', 'EACCES', 'EBUSY'],
+    };
+    const waitForRename = vi.fn(async () => {});
+    const fixture = await setup({
+      waitForRename,
+      fsOverride: {
+        rename: async (from, to) => {
+          const code = failures[path.basename(from)]?.shift();
+          if (code) throw Object.assign(new Error('temporarily locked'), { code });
+          return fs.rename(from, to);
+        },
+      },
+    });
+    const previous = path.join(fixture.managedDir, 'yt-dlp');
+    await fs.mkdir(previous, { recursive: true });
+    await fs.writeFile(path.join(previous, 'yt-dlp.exe'), 'old');
+    const result = await fixture.manager.installYtDlp();
+    expect(await fs.readFile(result.path, 'utf8')).toBe('verified executable');
+    expect(waitForRename.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
+      100, 100, 200, 400,
+    ]);
+    expect(fixture.execute).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(fixture.managedDir)).toEqual(['yt-dlp']);
+  });
+  it('stops retrying persistent Windows locks and restores the previous tool', async () => {
+    let switchAttempts = 0;
+    const waitForRename = vi.fn(async () => {});
+    const fixture = await setup({
+      waitForRename,
+      fsOverride: {
+        rename: async (from, to) => {
+          if (path.basename(from) === 'ready') {
+            switchAttempts++;
+            throw Object.assign(new Error('still locked'), { code: 'EBUSY' });
+          }
+          return fs.rename(from, to);
+        },
+      },
+    });
+    const previous = path.join(fixture.managedDir, 'yt-dlp');
+    await fs.mkdir(previous, { recursive: true });
+    await fs.writeFile(path.join(previous, 'yt-dlp.exe'), 'old');
+    await expect(fixture.manager.installYtDlp()).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(switchAttempts).toBe(8);
+    expect(waitForRename.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
+      100, 200, 400, 800, 1000, 1000, 1000,
+    ]);
+    expect(await fs.readFile(path.join(previous, 'yt-dlp.exe'), 'utf8')).toBe('old');
+    expect(await fs.readdir(fixture.managedDir)).toEqual(['yt-dlp']);
+  });
+  it('does not retry a permanent switch error and rolls back immediately', async () => {
+    const waitForRename = vi.fn(async () => {});
+    const rename = vi.fn(async (from, to) => {
+      if (path.basename(from) === 'ready')
+        throw Object.assign(new Error('disk error'), { code: 'EIO' });
+      return fs.rename(from, to);
+    });
+    const fixture = await setup({ waitForRename, fsOverride: { rename } });
+    const previous = path.join(fixture.managedDir, 'yt-dlp');
+    await fs.mkdir(previous, { recursive: true });
+    await fs.writeFile(path.join(previous, 'yt-dlp.exe'), 'old');
+    await expect(fixture.manager.installYtDlp()).rejects.toMatchObject({ code: 'EIO' });
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(waitForRename).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(previous, 'yt-dlp.exe'), 'utf8')).toBe('old');
+    expect(await fs.readdir(fixture.managedDir)).toEqual(['yt-dlp']);
+  });
+  it('aborts Windows backoff promptly but retries rollback independently of cancellation', async () => {
+    const controller = new AbortController();
+    let signalWaiting;
+    const waiting = new Promise((resolve) => {
+      signalWaiting = resolve;
+    });
+    const waitForRename = vi.fn((milliseconds, signal) => {
+      if (!signal) return Promise.resolve();
+      signalWaiting();
+      return delay(milliseconds, undefined, { signal });
+    });
+    let switchAttempts = 0,
+      rollbackAttempts = 0;
+    const fixture = await setup({
+      waitForRename,
+      fsOverride: {
+        rename: async (from, to) => {
+          const name = path.basename(from);
+          if (name === 'ready') {
+            switchAttempts++;
+            throw Object.assign(new Error('locked'), { code: 'EPERM' });
+          }
+          if (name === 'previous' && ++rollbackAttempts === 1)
+            throw Object.assign(new Error('rollback temporarily locked'), { code: 'EACCES' });
+          return fs.rename(from, to);
+        },
+      },
+    });
+    const previous = path.join(fixture.managedDir, 'yt-dlp');
+    await fs.mkdir(previous, { recursive: true });
+    await fs.writeFile(path.join(previous, 'yt-dlp.exe'), 'old');
+    const result = fixture.manager.installYtDlp({ signal: controller.signal });
+    const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    await waiting;
+    controller.abort();
+    await rejected;
+    expect(switchAttempts).toBe(1);
+    expect(rollbackAttempts).toBe(2);
+    expect(waitForRename.mock.calls[1]).toEqual([100, undefined]);
+    expect(await fs.readFile(path.join(previous, 'yt-dlp.exe'), 'utf8')).toBe('old');
+    expect(await fs.readdir(fixture.managedDir)).toEqual(['yt-dlp']);
+  });
+  it('retains the previous-version backup if all rollback retries fail', async () => {
+    let rollbackAttempts = 0;
+    const waitForRename = vi.fn(async () => {});
+    const fixture = await setup({
+      waitForRename,
+      fsOverride: {
+        rename: async (from, to) => {
+          if (path.basename(from) === 'ready')
+            throw Object.assign(new Error('switch failed'), { code: 'EIO' });
+          if (path.basename(from) === 'previous') {
+            rollbackAttempts++;
+            throw Object.assign(new Error('rollback locked'), { code: 'EPERM' });
+          }
+          return fs.rename(from, to);
+        },
+      },
+    });
+    const previous = path.join(fixture.managedDir, 'yt-dlp');
+    await fs.mkdir(previous, { recursive: true });
+    await fs.writeFile(path.join(previous, 'yt-dlp.exe'), 'old');
+    await expect(fixture.manager.installYtDlp()).rejects.toThrow(
+      'retained in the installation backup',
+    );
+    expect(rollbackAttempts).toBe(8);
+    expect(waitForRename).toHaveBeenCalledTimes(7);
+    const retained = await fs.readdir(fixture.managedDir);
+    expect(retained).toHaveLength(1);
+    expect(retained[0]).toMatch(/^\.yt-dlp-install-/u);
+    expect(
+      await fs.readFile(
+        path.join(fixture.managedDir, retained[0], 'previous', 'yt-dlp.exe'),
+        'utf8',
+      ),
+    ).toBe('old');
+  });
+  it('does not apply Windows lock retries on other platforms', async () => {
+    const waitForRename = vi.fn(async () => {});
+    const fixture = await setup({
+      platform: 'linux',
+      waitForRename,
+      fsOverride: {
+        rename: async (from, to) => {
+          if (path.basename(from) === 'ready')
+            throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+          return fs.rename(from, to);
+        },
+      },
+    });
+    await expect(fixture.manager.installYtDlp()).rejects.toMatchObject({ code: 'EACCES' });
+    expect(waitForRename).not.toHaveBeenCalled();
+    expect(await fs.readdir(fixture.managedDir)).toEqual([]);
   });
   it('does not replace an existing tool if the verified executable fails its probe', async () => {
     const fixture = await setup({ runProcess: vi.fn(async () => ({ code: 1 })) });

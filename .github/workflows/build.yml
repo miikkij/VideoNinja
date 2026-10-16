@@ -60,6 +60,8 @@ jobs:
 
       - name: Install verified media tools
         run: node scripts/setup-media-tools.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Exercise actual media downloads and conversion
         run: pnpm test:media
