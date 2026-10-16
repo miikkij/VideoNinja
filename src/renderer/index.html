@@ -64,6 +64,9 @@
         <section id="disk-alert" class="notice" role="status" hidden>
           <p id="disk-alert-message"></p>
         </section>
+        <section id="private-banner" class="notice" role="status" hidden>
+          <p data-i18n="privateActive">Private session: new activity is not kept after you quit.</p>
+        </section>
         <section id="notice" class="notice" hidden aria-labelledby="notice-message">
           <p id="notice-message"></p>
           <button type="button" id="dismiss-notice" data-i18n="dismiss">Dismiss</button>
@@ -89,17 +92,81 @@
               <h3>yt-dlp</h3>
               <p id="ytdlp-status"></p>
               <p id="ytdlp-path" class="tool-path"></p>
+              <div class="tool-buttons">
+                <button
+                  type="button"
+                  data-tool="yt-dlp"
+                  data-tool-action="install"
+                  data-i18n="installTool"
+                >
+                  Install</button
+                ><button
+                  type="button"
+                  data-tool="yt-dlp"
+                  data-tool-action="update"
+                  data-i18n="updateTool"
+                >
+                  Update
+                </button>
+              </div>
             </div>
             <div class="tool-card">
               <h3>ffmpeg</h3>
               <p id="ffmpeg-status"></p>
               <p id="ffmpeg-path" class="tool-path"></p>
+              <div class="tool-buttons">
+                <button
+                  type="button"
+                  data-tool="ffmpeg"
+                  data-tool-action="install"
+                  data-i18n="installTool"
+                >
+                  Install</button
+                ><button
+                  type="button"
+                  data-tool="ffmpeg"
+                  data-tool-action="update"
+                  data-i18n="updateTool"
+                >
+                  Update
+                </button>
+              </div>
             </div>
             <div class="tool-card">
               <h3 data-i18n="runtime">JavaScript runtime</h3>
               <p id="runtime-status"></p>
+              <div class="tool-buttons">
+                <button
+                  type="button"
+                  data-tool="runtime"
+                  data-tool-action="install"
+                  data-i18n="installTool"
+                >
+                  Install</button
+                ><button
+                  type="button"
+                  data-tool="runtime"
+                  data-tool-action="update"
+                  data-i18n="updateTool"
+                >
+                  Update
+                </button>
+              </div>
             </div>
           </div>
+          <p id="tool-action-status" class="hint" role="status"></p>
+          <div class="tool-actions">
+            <button
+              type="button"
+              id="diagnose-tools"
+              data-tool="yt-dlp"
+              data-tool-action="diagnose"
+              data-i18n="diagnoseTools"
+            >
+              Check YouTube readiness</button
+            ><span id="ejs-status" class="hint"></span>
+          </div>
+          <div id="tool-setup" class="setup-guidance" hidden></div>
           <div class="tool-actions">
             <button type="button" id="recheck-tools" data-i18n="recheck">Check tools again</button
             ><span class="muted" data-i18n="toolHint"
@@ -160,6 +227,177 @@
               >Start VideoNinja when I sign in</span
             ></label
           >
+          <div class="settings-grid">
+            <div class="field">
+              <label for="theme" data-i18n="theme">Appearance</label
+              ><select id="theme">
+                <option value="auto" data-i18n="themeAuto">Use system setting</option>
+                <option value="light" data-i18n="themeLight">Light</option>
+                <option value="dark" data-i18n="themeDark">Dark</option>
+              </select>
+            </div>
+            <label class="check-field"
+              ><input type="checkbox" id="notifications" /><span data-i18n="notifications"
+                >Notify me when a group of downloads finishes</span
+              ></label
+            >
+          </div>
+          <details id="workflow-settings" class="settings-advanced">
+            <summary data-i18n="workflowSettings">
+              Timing, bandwidth and duplicate downloads
+            </summary>
+            <label class="check-field"
+              ><input type="checkbox" id="skip-duplicates" /><span data-i18n="skipDuplicates"
+                >Skip videos already saved in the download archive</span
+              ></label
+            >
+            <p class="hint" data-i18n="duplicatesHint">
+              Completed downloads are remembered separately from history. Turn this off to
+              intentionally download them again.
+            </p>
+            <div class="field">
+              <label for="global-rate" data-i18n="globalRate"
+                >Total download speed limit (KiB/s)</label
+              ><input
+                id="global-rate"
+                type="number"
+                min="0"
+                max="1000000"
+                step="1"
+                aria-describedby="rate-hint"
+              />
+              <p id="rate-hint" class="hint" data-i18n="rateHint">
+                0 means no limit. Changes apply when a download next starts.
+              </p>
+            </div>
+            <label class="check-field"
+              ><input type="checkbox" id="schedule-enabled" aria-controls="schedule-fields" /><span
+                data-i18n="scheduleEnabled"
+                >Start downloads only during these hours</span
+              ></label
+            >
+            <div id="schedule-fields" class="settings-grid" hidden>
+              <div class="field">
+                <label for="schedule-start" data-i18n="scheduleStart">From (local time)</label
+                ><input id="schedule-start" type="time" />
+              </div>
+              <div class="field">
+                <label for="schedule-end" data-i18n="scheduleEnd">Until (local time)</label
+                ><input id="schedule-end" type="time" />
+              </div>
+            </div>
+            <p class="hint" data-i18n="scheduleHint">
+              Downloads already running can finish. An overnight window is supported; VideoNinja
+              must remain running.
+            </p>
+          </details>
+          <details id="privacy-settings" class="settings-advanced">
+            <summary data-i18n="privacySettings">History and privacy</summary>
+            <label class="check-field"
+              ><input type="checkbox" id="private-mode" /><span data-i18n="privateMode"
+                >Private session</span
+              ></label
+            >
+            <p class="hint" data-i18n="privateHint">
+              New download activity is not saved for the next session. Downloaded files and existing
+              history remain on this device.
+            </p>
+            <label class="check-field"
+              ><input
+                type="checkbox"
+                id="encrypted-storage"
+                aria-describedby="encryption-status"
+              /><span data-i18n="encryptedStorage"
+                >Encrypt saved activity on this device</span
+              ></label
+            >
+            <p id="encryption-status" class="hint" role="status"></p>
+            <div class="field">
+              <label for="history-retention" data-i18n="historyRetention"
+                >Keep history for this many days</label
+              ><input
+                id="history-retention"
+                type="number"
+                min="0"
+                max="3650"
+                step="1"
+                aria-describedby="retention-hint"
+              />
+              <p id="retention-hint" class="hint" data-i18n="retentionHint">
+                0 keeps history without an age limit. Removing history does not delete media files.
+              </p>
+            </div>
+          </details>
+          <details class="settings-advanced">
+            <summary data-i18n="reliabilitySettings">Retries and disk space</summary>
+            <div class="settings-grid">
+              <div class="field">
+                <label for="retry-attempts" data-i18n="retryAttempts">Automatic retries</label
+                ><input id="retry-attempts" type="number" min="0" max="5" step="1" />
+              </div>
+              <div class="field">
+                <label for="retry-delay" data-i18n="retryDelay"
+                  >Delay between retries (seconds)</label
+                ><input id="retry-delay" type="number" min="1" max="300" step="1" />
+              </div>
+              <div class="field">
+                <label for="disk-reserve" data-i18n="diskReserve"
+                  >Keep this much disk space free (MiB)</label
+                ><input id="disk-reserve" type="number" min="0" max="1048576" step="1" />
+              </div>
+              <div class="field">
+                <label for="stall-timeout" data-i18n="stallTimeout"
+                  >Retry if download stops making progress (seconds)</label
+                ><input id="stall-timeout" type="number" min="30" max="3600" step="1" />
+              </div>
+              <div class="field">
+                <label for="processing-timeout" data-i18n="processingTimeout"
+                  >Maximum media processing time (seconds)</label
+                ><input id="processing-timeout" type="number" min="60" max="7200" step="1" />
+              </div>
+            </div>
+            <p class="hint" data-i18n="reliabilityHint">
+              Only recoverable errors are retried. Leave enough processing time for large or long
+              videos.
+            </p>
+          </details>
+          <details class="settings-advanced" id="app-updates">
+            <summary data-i18n="appUpdates">VideoNinja updates</summary>
+            <p id="app-update-status" role="status" data-i18n="updateIdle">
+              Check for a new version when you are ready.
+            </p>
+            <label class="check-field"
+              ><input id="check-updates-startup" type="checkbox" /><span
+                data-i18n="checkUpdatesStartup"
+                >Check for updates when VideoNinja starts</span
+              ></label
+            >
+            <progress
+              id="app-update-progress"
+              max="100"
+              hidden
+              data-i18n-aria-label="updateProgress"
+            ></progress>
+            <div class="tool-actions">
+              <button type="button" id="app-update-check" data-i18n="checkUpdates">
+                Check for updates</button
+              ><button type="button" id="app-update-download" data-i18n="downloadUpdate" hidden>
+                Download update</button
+              ><button type="button" id="app-update-install" data-i18n="installUpdate" hidden>
+                Restart and install</button
+              ><button type="button" id="app-update-release" data-i18n="openRelease" hidden>
+                Open release page
+              </button>
+            </div>
+            <p class="hint" data-i18n="updateHint">
+              Installation restarts VideoNinja. Active downloads are stopped safely and can be
+              resumed afterward.
+            </p>
+            <details id="release-notes" hidden>
+              <summary data-i18n="releaseNotes">What's new</summary>
+              <pre id="release-notes-text" class="release-notes"></pre>
+            </details>
+          </details>
           <details class="settings-advanced">
             <summary data-i18n="authentication">Authentication and advanced settings</summary>
             <p class="hint" data-i18n="cookiePrivacy">
@@ -236,6 +474,39 @@
           <h2 id="download-heading" tabindex="-1" data-i18n="addVideos">Download videos</h2>
           <p id="readiness" class="hint" role="status"></p>
           <form id="download-form" novalidate>
+            <details class="profile-panel">
+              <summary data-i18n="profiles">Saved download profiles</summary>
+              <div class="field">
+                <label for="profile-select" data-i18n="profileSelect">Profile</label
+                ><select id="profile-select">
+                  <option value="" data-i18n="profileNone">Choose a profile</option>
+                </select>
+              </div>
+              <div class="tool-actions">
+                <button id="profile-apply" type="button" disabled data-i18n="applyProfile">
+                  Use profile</button
+                ><button id="profile-delete" type="button" disabled data-i18n="deleteProfile">
+                  Delete profile
+                </button>
+              </div>
+              <div class="field">
+                <label for="profile-name" data-i18n="profileName">Save current options as</label>
+                <div class="field-action">
+                  <input id="profile-name" maxlength="80" autocomplete="off" /><button
+                    id="profile-save"
+                    type="button"
+                    data-i18n="saveProfile"
+                  >
+                    Save profile
+                  </button>
+                </div>
+              </div>
+              <p class="hint" data-i18n="profileHint">
+                Profiles remember the folder and download options. Exact source formats are chosen
+                separately for each link.
+              </p>
+              <p id="profile-status" class="hint" role="status"></p>
+            </details>
             <div class="field">
               <label for="video-urls" data-i18n="videoUrls">Video links</label
               ><textarea
@@ -288,6 +559,46 @@
             <details class="download-advanced">
               <summary data-i18n="downloadOptions">Options for these downloads</summary>
               <div class="settings-grid">
+                <div class="field">
+                  <label for="download-rate" data-i18n="downloadRate"
+                    >Speed limit for each download (KiB/s)</label
+                  ><input
+                    id="download-rate"
+                    type="number"
+                    min="0"
+                    max="1000000"
+                    step="1"
+                    value="0"
+                  />
+                  <p class="hint" data-i18n="rateZero">0 means no additional limit.</p>
+                </div>
+                <div class="field">
+                  <label class="check-field"
+                    ><input id="subtitles" type="checkbox" aria-controls="subtitle-fields" /><span
+                      data-i18n="subtitles"
+                      >Download subtitles</span
+                    ></label
+                  >
+                  <div id="subtitle-fields" hidden>
+                    <label for="subtitle-lang" data-i18n="subtitleLang">Subtitle languages</label
+                    ><input
+                      id="subtitle-lang"
+                      value="en"
+                      maxlength="80"
+                      aria-describedby="subtitle-hint"
+                    />
+                    <p id="subtitle-hint" class="hint" data-i18n="subtitleHint">
+                      Use language codes separated by commas, for example en,fi.
+                    </p>
+                    <label class="check-field"
+                      ><input id="subtitle-auto" type="checkbox" /><span data-i18n="subtitleAuto"
+                        >Include automatic captions</span
+                      ></label
+                    >
+                  </div>
+                </div>
+              </div>
+              <div class="settings-grid">
                 <label class="check-field"
                   ><input type="checkbox" id="force-ipv4" /><span data-i18n="forceIpv4"
                     >Use IPv4</span
@@ -336,6 +647,22 @@
             <h3 id="preview-title"></h3>
             <p id="preview-description"></p>
             <p id="preview-url" class="url-text"></p>
+            <div id="format-controls" hidden>
+              <div class="field">
+                <label for="format-select" data-i18n="exactFormat">Available source formats</label
+                ><select id="format-select"></select>
+              </div>
+              <div id="format-audio-field" class="field" hidden>
+                <label for="format-audio" data-i18n="companionAudio"
+                  >Audio to combine with this video</label
+                ><select id="format-audio"></select>
+              </div>
+              <p id="format-details" class="hint"></p>
+              <p class="hint" data-i18n="formatHint">
+                An exact format applies only to this link. Select Automatic to use your quality
+                preference. Size estimates may exclude extra audio or subtitles.
+              </p>
+            </div>
           </section>
         </section>
         <section class="panel" aria-labelledby="queue-heading">
@@ -346,6 +673,32 @@
           <p id="queue-empty" class="empty" data-i18n="queueEmpty">
             Your queue is empty. Add a video link above.
           </p>
+          <div
+            class="bulk-toolbar"
+            id="queue-toolbar"
+            aria-label="Queue selection"
+            data-i18n-aria-label="queueSelection"
+          >
+            <button type="button" id="queue-select-all" data-i18n="selectAllJobs">Select all</button
+            ><button type="button" id="queue-clear-selection" data-i18n="clearSelection">
+              Clear selection</button
+            ><span id="queue-selected" class="hint" role="status"></span
+            ><button type="button" data-queue-action="pause" data-i18n="pauseSelected">
+              Pause selected</button
+            ><button type="button" data-queue-action="resume" data-i18n="resumeSelected">
+              Resume selected</button
+            ><button type="button" data-queue-action="move" data-i18n="moveSelected">
+              Move selected to top</button
+            ><button
+              type="button"
+              data-queue-action="cancel"
+              class="danger"
+              data-i18n="cancelSelected"
+            >
+              Cancel selected
+            </button>
+          </div>
+          <p id="queue-policy-status" class="hint" role="status"></p>
           <ol id="queue-list" class="download-list"></ol>
         </section>
         <section class="panel" aria-labelledby="history-heading">
@@ -370,6 +723,21 @@
           <p id="history-empty" class="empty" data-i18n="historyEmpty">
             Finished downloads appear here.
           </p>
+          <div class="bulk-toolbar" id="history-toolbar">
+            <button type="button" id="history-select-visible" data-i18n="selectVisible">
+              Select visible</button
+            ><button type="button" id="history-clear-selection" data-i18n="clearSelection">
+              Clear selection</button
+            ><span id="history-selected" class="hint" role="status"></span
+            ><button
+              type="button"
+              id="history-delete-selected"
+              class="danger"
+              data-i18n="deleteSelectedHistory"
+            >
+              Remove selected history
+            </button>
+          </div>
           <ol id="history-list" class="download-list"></ol>
         </section>
       </main>
@@ -390,6 +758,7 @@
           Review the settings for this attempt. The original entry stays in history.
         </p>
         <p id="retry-title" class="url-text"></p>
+        <p id="retry-destination" class="hint"></p>
         <pre id="retry-original-error" class="error-detail"></pre>
         <div class="field">
           <label for="retry-quality" data-i18n="quality">Quality</label
@@ -412,6 +781,29 @@
             <option value="opus">Opus</option>
             <option value="wav">WAV</option>
           </select>
+        </div>
+        <div class="field">
+          <label for="retry-format" data-i18n="retryExactFormat"
+            >Exact source format (leave empty for automatic)</label
+          ><input id="retry-format" maxlength="200" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="retry-rate" data-i18n="downloadRate"
+            >Speed limit for each download (KiB/s)</label
+          ><input id="retry-rate" type="number" min="0" max="1000000" step="1" />
+        </div>
+        <label class="check-field"
+          ><input id="retry-subtitles" type="checkbox" /><span data-i18n="subtitles"
+            >Download subtitles</span
+          ></label
+        >
+        <div class="field" id="retry-subtitle-fields">
+          <label for="retry-subtitle-lang" data-i18n="subtitleLang">Subtitle languages</label
+          ><input id="retry-subtitle-lang" maxlength="80" /><label class="check-field"
+            ><input id="retry-subtitle-auto" type="checkbox" /><span data-i18n="subtitleAuto"
+              >Include automatic captions</span
+            ></label
+          >
         </div>
         <div class="field">
           <label for="retry-cookie-source" data-i18n="cookieSource">Cookie source</label
@@ -497,6 +889,27 @@
       <p id="playlist-status" class="hint" role="status" aria-live="polite"></p>
       <p id="playlist-limit" class="hint" hidden></p>
       <p id="playlist-error" class="field-error" role="alert" hidden></p>
+      <div class="settings-grid">
+        <div class="field">
+          <label for="playlist-search" data-i18n="playlistSearch">Find a video on this page</label
+          ><input id="playlist-search" type="search" aria-controls="playlist-list" />
+        </div>
+        <div class="field">
+          <label for="playlist-range" data-i18n="playlistRange">Select entry numbers</label>
+          <div class="field-action">
+            <input
+              id="playlist-range"
+              placeholder="1-10, 15"
+              aria-describedby="playlist-range-hint"
+            /><button type="button" id="playlist-apply-range" data-i18n="selectRange">
+              Select range
+            </button>
+          </div>
+          <p id="playlist-range-hint" class="hint" data-i18n="playlistRangeHint">
+            Use numbers on this page, for example 1-10,15. Unavailable entries are skipped.
+          </p>
+        </div>
+      </div>
       <div class="playlist-selection">
         <button type="button" id="playlist-select-all" data-i18n="selectAll">
           Select all available</button
@@ -505,6 +918,17 @@
         </button>
       </div>
       <ol id="playlist-list" class="playlist-list" aria-labelledby="playlist-heading"></ol>
+      <p id="playlist-no-match" class="hint" hidden data-i18n="playlistNoMatch">
+        No entries match this search.
+      </p>
+      <div class="playlist-pagination">
+        <button type="button" id="playlist-previous" data-i18n="previousPage">Previous page</button
+        ><span id="playlist-page" class="hint"></span
+        ><button type="button" id="playlist-next" data-i18n="nextPage">Next page</button>
+      </div>
+      <p class="hint" data-i18n="playlistPageHint">
+        Add your selection or clear it before changing pages. Selections belong to the current page.
+      </p>
       <div class="dialog-actions">
         <button
           type="button"

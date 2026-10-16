@@ -7,7 +7,57 @@
   const listeners = new AbortController();
   const subscriptions = [];
   const rows = new Map();
-  let settings = { language: 'en', quality: 'best', jsRuntime: 'auto', maxConcurrent: 1 };
+  let settings = {
+    language: 'en',
+    quality: 'best',
+    jsRuntime: 'auto',
+    maxConcurrent: 1,
+    profiles: [],
+    theme: 'auto',
+    retryAttempts: 2,
+    retryDelaySeconds: 15,
+    diskReserveMb: 1024,
+    globalRateKbps: 0,
+    scheduleEnabled: false,
+    scheduleStart: '00:00',
+    scheduleEnd: '06:00',
+    historyRetentionDays: 0,
+    privateMode: false,
+    encryptedStorage: false,
+    skipDuplicates: true,
+    stallTimeoutSeconds: 180,
+    processingTimeoutSeconds: 900,
+    notifications: false,
+    checkUpdatesOnStartup: true,
+  };
+  const numericSettings = {
+    'global-rate': 'globalRateKbps',
+    'history-retention': 'historyRetentionDays',
+    'retry-attempts': 'retryAttempts',
+    'retry-delay': 'retryDelaySeconds',
+    'disk-reserve': 'diskReserveMb',
+    'stall-timeout': 'stallTimeoutSeconds',
+    'processing-timeout': 'processingTimeoutSeconds',
+  };
+  const booleanSettings = {
+    notifications: 'notifications',
+    'skip-duplicates': 'skipDuplicates',
+    'schedule-enabled': 'scheduleEnabled',
+    'private-mode': 'privateMode',
+    'encrypted-storage': 'encryptedStorage',
+    'check-updates-startup': 'checkUpdatesOnStartup',
+  };
+  let privacy = {};
+  let appUpdateState = { status: 'idle' };
+  let updateBusy = false;
+  let toolBusy = false;
+  let toolSetup = null;
+  let toolDiagnostics = null;
+  let metadataFormats = [];
+  let formatUrl = null;
+  const selectedQueue = new Set();
+  const selectedHistory = new Set();
+  let bulkBusy = false;
   let queue = { queue: [], history: [] };
   let tools = {};
   let diskSpace = null;
@@ -25,6 +75,10 @@
   let playlistRows = [];
   let playlistLoading = false;
   let playlistAdding = false;
+  let playlistUrl = null;
+  let playlistStart = 1;
+  let playlistPageSize = 500;
+  let playlistHasMore = false;
 
   function listen(element, event, callback, signal = listeners.signal) {
     element.addEventListener(event, callback, { signal });
@@ -87,7 +141,9 @@
       if (button.isConnected) {
         button.disabled = ['clear-history', 'export-history'].includes(button.id)
           ? !(queue.history || []).length
-          : false;
+          : ['profile-apply', 'profile-delete'].includes(button.id)
+            ? !$('profile-select').value
+            : false;
       }
     }
   }
@@ -144,6 +200,7 @@
     }
   }
   function renderTools() {
+    toolSetup = tools.setup || toolSetup;
     for (const name of ['ytdlp', 'ffmpeg']) {
       const tool = tools[name];
       $(`${name}-status`).textContent = !tool
@@ -159,6 +216,30 @@
       ? runtimes.map((item) => `${item.name}${item.version ? ` ${item.version}` : ''}`).join(', ')
       : t('noRuntime');
     $('runtime-status').classList.toggle('tool-missing', !runtimes.length);
+    const ejs = toolDiagnostics?.ejs || tools.ejs || tools.ytdlp?.ejs;
+    $('ejs-status').textContent =
+      typeof ejs === 'object' && ejs ? t(`ejs_${ejs.status}`) : t('ejs_not_checked');
+    document.querySelectorAll('[data-tool-action]').forEach((button) => {
+      button.disabled = !initialized || toolBusy;
+      if (button.dataset.toolAction === 'install' || button.dataset.toolAction === 'update') {
+        const plan = toolSetup?.tools?.find((item) => item.tool === button.dataset.tool);
+        const available =
+          button.dataset.tool === 'runtime'
+            ? runtimes.length > 0
+            : tools[button.dataset.tool === 'yt-dlp' ? 'ytdlp' : 'ffmpeg']?.available;
+        button.hidden =
+          button.dataset.toolAction === 'install'
+            ? plan?.managed !== false && Boolean(available)
+            : plan?.managed === false || !available;
+        button.textContent = t(
+          plan?.managed === false
+            ? 'setupInstructions'
+            : button.dataset.toolAction === 'install'
+              ? 'installTool'
+              : 'updateTool',
+        );
+      }
+    });
     $('tool-help').open = Boolean(
       tools.ytdlp && (!tools.ytdlp.available || !tools.ffmpeg?.available),
     );
@@ -170,23 +251,34 @@
       settingsSaved &&
       Boolean(settings.downloadPath) &&
       Boolean(tools.ytdlp?.available);
-    $('add-downloads').disabled = !ready || adding;
-    $('preview-button').disabled = !initialized || !tools.ytdlp?.available;
+    $('add-downloads').disabled = !ready || adding || toolBusy;
+    $('preview-button').disabled = !initialized || !tools.ytdlp?.available || toolBusy;
     $('playlist-preview-button').disabled =
-      !initialized || !tools.ytdlp?.available || playlistLoading;
-    $('readiness').textContent = !settingsSaved
-      ? t('saveFailed')
-      : !settings.downloadPath
-        ? t('needFolder')
-        : !tools.ytdlp?.available
-          ? t('needTools')
-          : t('ready', { folder: settings.downloadPath });
+      !initialized || !tools.ytdlp?.available || playlistLoading || toolBusy;
+    $('readiness').textContent = toolBusy
+      ? t('toolsWorking')
+      : !settingsSaved
+        ? t('saveFailed')
+        : !settings.downloadPath
+          ? t('needFolder')
+          : !tools.ytdlp?.available
+            ? t('needTools')
+            : t('ready', { folder: settings.downloadPath });
     $('setup-hint').hidden = ready;
   }
   function applySettings() {
     i18n.setLanguage(settings.language);
     $('language').value = settings.language === 'fi' ? 'fi' : 'en';
     $('max-concurrent').value = String(settings.maxConcurrent || 1);
+    $('theme').value = settings.theme || 'auto';
+    document.documentElement.dataset.theme = settings.theme || 'auto';
+    for (const [id, key] of Object.entries(numericSettings)) $(id).value = String(settings[key]);
+    for (const [id, key] of Object.entries(booleanSettings)) $(id).checked = Boolean(settings[key]);
+    $('schedule-start').value = settings.scheduleStart;
+    $('schedule-end').value = settings.scheduleEnd;
+    renderPolicySettings();
+    renderProfiles();
+    renderAppUpdate();
     $('download-path').value = settings.downloadPath || '';
     $('cookie-source').value = settings.cookieSource || '';
     $('cookie-file').value = settings.cookieFilePath || '';
@@ -207,10 +299,19 @@
     renderDisk();
     renderQueue();
     renderPlaylistSelection();
+    if (metadataFormats.length) {
+      const selected = $('format-select').value,
+        audio = $('format-audio').value;
+      renderFormats({ formats: metadataFormats }, formatUrl);
+      $('format-select').value = selected;
+      $('format-audio').value = audio;
+      renderFormatDetails();
+    }
   }
   function saveSettings(patch) {
     settings = { ...settings, ...patch };
     const snapshot = { ...settings };
+    delete snapshot.profiles;
     const revision = ++saveRevision;
     $('settings-save-status').textContent = t('saving');
     saveChain = saveChain
@@ -224,6 +325,7 @@
             $('settings-save-status').textContent = t('saved');
             $('retry-save').hidden = true;
             renderReadiness();
+            renderPolicySettings();
           }
           return true;
         } catch (error) {
@@ -271,7 +373,7 @@
     }
     return source ? { cookiesFromBrowser: source } : {};
   }
-  function downloadOptions() {
+  function downloadOptions({ includeFormat = true } = {}) {
     const source =
       $('download-cookie-source').value === 'default'
         ? settings.cookieSource || ''
@@ -280,6 +382,10 @@
       quality: $('quality').value,
       ...cookieOptions(source, settings.cookieFilePath),
     };
+    delete options.cookiesFromBrowser;
+    delete options.cookieFile;
+    Object.assign(options, cookieOptions(source, settings.cookieFilePath));
+    delete options.formatId;
     if (options.quality === 'audio') options.audioFormat = $('audio-format').value;
     if (settings.userAgent) options.userAgent = settings.userAgent;
     if (settings.extraArgs) options.extraArgs = settings.extraArgs;
@@ -287,6 +393,31 @@
     if ($('force-ipv4').checked) options.forceIpv4 = true;
     if ($('referer').value.trim()) options.referer = $('referer').value.trim();
     if ($('extractor-args').value.trim()) options.extractorArgs = $('extractor-args').value.trim();
+    const rate = readNumber('download-rate');
+    if (rate) options.rateLimitKbps = rate;
+    else delete options.rateLimitKbps;
+    delete options.subtitles;
+    delete options.subtitleLang;
+    delete options.subtitleAuto;
+    if ($('subtitles').checked) {
+      options.subtitles = true;
+      options.subtitleLang = subtitleLanguage('subtitle-lang');
+      if ($('subtitle-auto').checked) options.subtitleAuto = true;
+    }
+    const selectedFormat = $('format-select').value;
+    if (
+      includeFormat &&
+      selectedFormat &&
+      formatUrl &&
+      metadataFormats.some((format) => format.formatId === selectedFormat)
+    ) {
+      const urls = parseUrls();
+      if (urls.length !== 1 || urls[0] !== formatUrl) throw new Error(t('formatSingle'));
+      options.formatId = selectedFormat;
+      const chosen = metadataFormats.find((format) => format.formatId === selectedFormat);
+      if (chosen.hasVideo && !chosen.hasAudio && $('format-audio').value)
+        options.formatId += `+${$('format-audio').value}`;
+    }
     return options;
   }
   function formError(message) {
@@ -333,10 +464,304 @@
     if (parent) parent.appendChild(element);
     return element;
   }
+  function readNumber(id) {
+    const field = $(id);
+    const value = Number(field.value);
+    const min = Number(field.min);
+    const max = Number(field.max);
+    if (!field.value.trim() || !Number.isInteger(value) || value < min || value > max) {
+      field.setAttribute('aria-invalid', 'true');
+      throw new Error(
+        t('invalidNumber', {
+          field: document.querySelector(`label[for="${id}"]`)?.textContent || id,
+          min,
+          max,
+        }),
+      );
+    }
+    field.removeAttribute('aria-invalid');
+    return value;
+  }
+  function subtitleLanguage(id) {
+    const value = $(id).value.trim();
+    if (!value || !/^[a-zA-Z0-9.*,-]+$/u.test(value)) {
+      $(id).setAttribute('aria-invalid', 'true');
+      throw new Error(t('subtitleInvalid'));
+    }
+    $(id).removeAttribute('aria-invalid');
+    return value;
+  }
+  function renderPolicySettings() {
+    $('schedule-fields').hidden = !$('schedule-enabled').checked;
+    $('private-banner').hidden = !settings.privateMode || !settingsSaved;
+    $('encrypted-storage').disabled =
+      privacy.encryptionAvailable !== true && !settings.encryptedStorage;
+    $('encryption-status').textContent = t(
+      settings.encryptedStorage && settingsSaved
+        ? 'encryptionActive'
+        : privacy.encryptionAvailable
+          ? 'encryptionReady'
+          : 'encryptionUnavailable',
+    );
+    $('queue-policy-status').textContent = settings.scheduleEnabled
+      ? t('scheduleSummary', { start: settings.scheduleStart, end: settings.scheduleEnd })
+      : '';
+  }
+  function renderProfiles(selected = $('profile-select').value) {
+    const select = $('profile-select');
+    select.replaceChildren();
+    const empty = create('option', '', select);
+    empty.value = '';
+    empty.textContent = t('profileNone');
+    for (const profile of settings.profiles || []) {
+      const option = create('option', '', select);
+      option.value = profile.id;
+      option.textContent = profile.name;
+    }
+    select.value = selected;
+    $('profile-apply').disabled = !select.value;
+    $('profile-delete').disabled = !select.value;
+  }
+  async function applyProfile() {
+    const profile = (settings.profiles || []).find((item) => item.id === $('profile-select').value);
+    if (!profile) return;
+    const options = profile.options || {};
+    if (
+      !(await saveSettings({
+        downloadPath: profile.downloadPath || settings.downloadPath,
+        quality: options.quality || 'best',
+      }))
+    )
+      return;
+    applySettings();
+    $('audio-format').value = options.audioFormat || 'original';
+    $('download-cookie-source').value = 'default';
+    $('download-rate').value = String(options.rateLimitKbps || 0);
+    $('subtitles').checked = Boolean(options.subtitles);
+    $('subtitle-lang').value = options.subtitleLang || 'en';
+    $('subtitle-auto').checked = Boolean(options.subtitleAuto);
+    $('subtitle-fields').hidden = !options.subtitles;
+    $('force-ipv4').checked = Boolean(options.forceIpv4);
+    $('referer').value = options.referer || '';
+    $('extractor-args').value = options.extractorArgs || '';
+    resetFormats();
+    $('profile-status').textContent = t('profileApplied', { name: profile.name });
+  }
+  async function saveProfile() {
+    const name = $('profile-name').value.trim();
+    if (!name) {
+      $('profile-name').focus();
+      throw new Error(t('profileNameRequired'));
+    }
+    if (!(await saveChain)) throw new Error(t('saveFailed'));
+    const options = downloadOptions({ includeFormat: false });
+    delete options.formatId;
+    const saved = await request('saveProfile', {
+      name,
+      options,
+      downloadPath: settings.downloadPath,
+    });
+    settings = { ...settings, ...saved };
+    renderProfiles((settings.profiles || []).find((item) => item.name === name)?.id || '');
+    $('profile-name').value = '';
+    $('profile-status').textContent = t('profileSaved');
+  }
+  function formatLabel(format) {
+    const kind = format.hasVideo
+      ? format.hasAudio
+        ? 'formatVideo'
+        : 'formatSilent'
+      : 'formatAudio';
+    return [
+      format.formatId,
+      t(kind),
+      format.height ? `${format.height}p` : '',
+      format.fps ? `${format.fps} fps` : '',
+      format.ext?.toUpperCase(),
+      format.vcodec && format.vcodec !== 'none' ? format.vcodec : '',
+      format.acodec && format.acodec !== 'none' ? format.acodec : '',
+      format.filesize
+        ? bytes(format.filesize)
+        : format.filesizeApprox
+          ? `≈ ${bytes(format.filesizeApprox)}`
+          : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
+  function resetFormats() {
+    metadataFormats = [];
+    formatUrl = null;
+    $('format-select').replaceChildren();
+    $('format-audio').replaceChildren();
+    $('format-controls').hidden = true;
+    $('format-audio-field').hidden = true;
+  }
+  function renderFormats(preview, url) {
+    resetFormats();
+    metadataFormats = (Array.isArray(preview?.formats) ? preview.formats : [])
+      .slice(0, 200)
+      .filter((format) => typeof format.formatId === 'string');
+    formatUrl = url;
+    $('format-controls').hidden = !metadataFormats.length;
+    const automatic = create('option', '', $('format-select'));
+    automatic.value = '';
+    automatic.textContent = t('formatAutomatic');
+    const silent = create('option', '', $('format-audio'));
+    silent.value = '';
+    silent.textContent = t('audioNone');
+    for (const format of metadataFormats) {
+      const option = create('option', '', $('format-select'));
+      option.value = format.formatId;
+      option.textContent = formatLabel(format);
+      if (format.hasAudio && !format.hasVideo) {
+        const audio = create('option', '', $('format-audio'));
+        audio.value = format.formatId;
+        audio.textContent = formatLabel(format);
+      }
+    }
+    if ($('format-audio').options.length > 1) $('format-audio').selectedIndex = 1;
+    renderFormatDetails();
+  }
+  function renderFormatDetails() {
+    const format = metadataFormats.find((item) => item.formatId === $('format-select').value);
+    $('format-audio-field').hidden = !format?.hasVideo || Boolean(format.hasAudio);
+    const audio = !$('format-audio-field').hidden
+      ? metadataFormats.find((item) => item.formatId === $('format-audio').value)
+      : null;
+    const pieces = [format, audio].filter(Boolean);
+    const size = pieces.reduce(
+      (total, item) => total + (item.filesize || item.filesizeApprox || 0),
+      0,
+    );
+    const complete = pieces.length && pieces.every((item) => item.filesize || item.filesizeApprox);
+    $('format-details').textContent = complete
+      ? t(pieces.every((item) => item.filesize) ? 'formatSize' : 'formatEstimate', {
+          size: bytes(size),
+        })
+      : t('formatUnknown');
+    if (
+      complete &&
+      diskSpace?.available &&
+      diskSpace.free - size < settings.diskReserveMb * 1024 ** 2
+    )
+      $('format-details').textContent += ` ${t('formatDiskWarning')}`;
+  }
+  function renderAppUpdate() {
+    const state = appUpdateState;
+    const keys = {
+      idle: 'updateIdle',
+      checking: 'updateChecking',
+      available: 'updateAvailable',
+      'not-available': 'updateCurrent',
+      downloading: 'updateDownloading',
+      downloaded: 'updateDownloaded',
+      installing: 'updateInstalling',
+      error: 'updateError',
+      manual: 'updateManual',
+    };
+    $('app-update-status').textContent = t(keys[state.status] || 'updateIdle', {
+      version: state.version || '',
+    });
+    if (state.status === 'error' && state.message)
+      $('app-update-status').textContent += ` ${state.message}`;
+    const busy = updateBusy || ['checking', 'downloading', 'installing'].includes(state.status);
+    $('app-update-check').disabled = busy;
+    $('app-update-download').hidden = state.status !== 'available';
+    $('app-update-download').disabled = busy;
+    $('app-update-install').hidden = state.status !== 'downloaded' || !state.canInstall;
+    $('app-update-install').disabled =
+      busy || (queue.queue || []).some((job) => job.status === 'downloading');
+    $('app-update-release').hidden = !state.releaseUrl;
+    const progress = typeof state.progress === 'object' ? state.progress?.percent : state.progress;
+    $('app-update-progress').hidden = state.status !== 'downloading';
+    if (Number.isFinite(progress))
+      $('app-update-progress').value = Math.max(0, Math.min(100, progress));
+    else $('app-update-progress').removeAttribute('value');
+    $('release-notes').hidden = !state.releaseNotes;
+    $('release-notes-text').textContent =
+      typeof state.releaseNotes === 'string' ? state.releaseNotes.slice(0, 20000) : '';
+  }
+  async function runAppUpdate(actionName) {
+    updateBusy = true;
+    renderAppUpdate();
+    try {
+      appUpdateState = await request('appUpdate', { action: actionName });
+    } catch (error) {
+      appUpdateState = { ...appUpdateState, status: 'error', message: error.message };
+    } finally {
+      updateBusy = false;
+      renderAppUpdate();
+    }
+  }
+  function renderToolGuidance(result = {}) {
+    const container = $('tool-setup');
+    container.replaceChildren();
+    const command = result.command;
+    const url = result.url;
+    if (result.status === 'guided') create('p', '', container).textContent = t('setupManual');
+    if (result.status === 'installed')
+      create('p', '', container).textContent = t('toolInstalled', {
+        tool: result.tool || '',
+        version: result.version || '',
+      });
+    if (result.ejs) {
+      create('p', '', container).textContent = t(`ejs_${result.ejs.status}`);
+      create('p', 'hint', container).textContent = [
+        result.ejs.version ? `EJS ${result.ejs.version}` : '',
+        result.ejs.runtime || '',
+        t('ejsNoLiveTest'),
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      create('p', 'hint', container).textContent = t(
+        result.ffprobe?.available ? 'probeAvailable' : 'probeMissing',
+      );
+    }
+    if (command) {
+      create('pre', 'setup-command', container).textContent = command;
+      const copy = create('button', '', container);
+      copy.type = 'button';
+      copy.dataset.copyCommand = 'true';
+      copy.textContent = t('copyCommand');
+    }
+    if (url) {
+      const link = create('button', '', container);
+      link.type = 'button';
+      link.dataset.setupUrl = url;
+      link.textContent = t('installHelp');
+    }
+    container.hidden = !container.childElementCount;
+  }
+  async function runToolAction(tool, actionName) {
+    if (toolBusy) return;
+    toolBusy = true;
+    $('tool-action-status').textContent = t('toolWorking', { tool });
+    renderTools();
+    try {
+      const result = await request('toolAction', { tool, action: actionName });
+      tools = result.tools || tools;
+      toolSetup = result.setup || toolSetup;
+      toolDiagnostics = result.result?.ejs ? result.result : null;
+      renderToolGuidance(result.result || {});
+      $('tool-action-status').textContent = t('toolFinished');
+    } catch (error) {
+      $('tool-action-status').textContent = error.message;
+      notice(error.message, true);
+    } finally {
+      toolBusy = false;
+      renderTools();
+    }
+  }
   function createRow(id) {
     const controller = new AbortController();
     const element = create('li', 'download-item');
     element.dataset.id = id;
+    const selectLabel = create('label', 'row-select', element);
+    const select = create('input', '', selectLabel);
+    select.type = 'checkbox';
+    select.dataset.selectJob = id;
+    const selectText = create('span', 'sr-only', selectLabel);
     const title = create('h3', 'download-title', element);
     const url = create('p', 'url-text', element);
     const meta = create('p', 'download-meta', element);
@@ -351,6 +776,16 @@
     const errorTitle = create('p', '', errorArea);
     const errorDetail = create('pre', 'error-detail', errorArea);
     const errorNext = create('p', 'hint', errorArea);
+    const remedy = create('button', '', errorArea);
+    remedy.type = 'button';
+    listen(
+      remedy,
+      'click',
+      () => {
+        void runRemedy(rows.get(id), remedy);
+      },
+      controller.signal,
+    );
     const copy = create('button', '', errorArea);
     copy.type = 'button';
     listen(
@@ -365,6 +800,8 @@
     );
     return {
       element,
+      select,
+      selectText,
       title,
       url,
       meta,
@@ -377,6 +814,7 @@
       errorTitle,
       errorDetail,
       errorNext,
+      remedy,
       copy,
       buttons: new Map(),
       controller,
@@ -385,6 +823,7 @@
   }
   function desiredActions(download, list) {
     if (download.status === 'completed') return ['openFile', 'showFolder'];
+    if (download.status === 'skipped') return ['reviewDuplicates'];
     if (download.status === 'failed' || download.status === 'cancelled')
       return ['quickRetry', 'retryOptions'];
     if (download.status === 'downloading') return ['pause', 'cancel'];
@@ -397,6 +836,12 @@
   }
   async function runRowAction(name, row, button) {
     const download = row.download;
+    if (name === 'reviewDuplicates') {
+      openSettings(true);
+      $('workflow-settings').open = true;
+      $('skip-duplicates').focus();
+      return;
+    }
     if (name === 'retryOptions') {
       openRetry(download, button);
       return;
@@ -433,6 +878,12 @@
     row.element.dataset.status = download.status;
     const title = download.title || download.url || 'Video';
     row.title.textContent = title;
+    row.selectText.textContent = t('selectJob', { title });
+    row.select.checked = (
+      ['completed', 'failed', 'cancelled', 'skipped'].includes(download.status)
+        ? selectedHistory
+        : selectedQueue
+    ).has(download.id);
     row.url.textContent = download.title ? download.url || '' : '';
     row.url.hidden = !download.title;
     const quality = download.options?.quality;
@@ -450,6 +901,8 @@
       audioFormat === 'original' ? t('audioOriginal') : audioFormat?.toUpperCase(),
       download.outputPath,
     ];
+    if (download.options?.formatId) metadata.unshift(download.options.formatId);
+    if (download.options?.rateLimitKbps) metadata.push(`${download.options.rateLimitKbps} KiB/s`);
     if (download.completedAt) {
       const date = new Date(download.completedAt);
       if (!Number.isNaN(date.getTime()))
@@ -458,11 +911,29 @@
     row.meta.textContent = metadata.filter(Boolean).join(' · ');
     const phase = download.phase || download.stage;
     const stateKey =
-      download.status === 'downloading' &&
-      ['preparing', 'merging', 'processing', 'retrying', 'postprocessing'].includes(phase)
+      ['downloading', 'pending', 'paused'].includes(download.status) &&
+      [
+        'preparing',
+        'merging',
+        'processing',
+        'retrying',
+        'postprocessing',
+        'waiting-retry',
+        'waiting-disk',
+        'waiting-schedule',
+        'waiting-duplicate',
+      ].includes(phase)
         ? phase
         : download.status;
     const stateParts = [t(stateKey || 'pending')];
+    if (download.attempts > 1) stateParts.push(t('attemptCount', { count: download.attempts }));
+    if (download.retryAt && phase === 'waiting-retry') {
+      const retryDate = new Date(download.retryAt);
+      if (!Number.isNaN(retryDate.getTime()))
+        stateParts.push(t('retryTime', { time: retryDate.toLocaleTimeString(i18n.locale()) }));
+    }
+    if (download.integrity?.status === 'verified') stateParts.push(t('integrityVerified'));
+    else if (download.integrity?.status === 'size-only') stateParts.push(t('integritySize'));
     if (download.status === 'downloading' && Number.isFinite(download.speed) && download.speed > 0)
       stateParts.push(t('speed', { speed: bytes(download.speed) }));
     if (download.status === 'downloading' && Number.isFinite(download.eta) && download.eta >= 0)
@@ -480,7 +951,10 @@
     row.errorArea.hidden = !download.error;
     row.errorTitle.textContent = t('errorDetails');
     row.errorDetail.textContent = download.error || '';
-    row.errorNext.textContent = t('errorNext');
+    const remedy = jobRemedy(download);
+    row.errorNext.textContent = t(remedy?.message || 'errorNext');
+    row.remedy.hidden = !remedy?.action;
+    row.remedy.textContent = remedy?.action ? t(remedy.action) : '';
     row.copy.textContent = t('copyError');
     const actions = desiredActions(download, list);
     for (const [name, button] of row.buttons) {
@@ -544,6 +1018,10 @@
     const pending = Array.isArray(queue.queue) ? queue.queue : [];
     const history = Array.isArray(queue.history) ? queue.history : [];
     const ids = new Set([...pending, ...history].map((item) => item.id));
+    for (const id of selectedQueue)
+      if (!pending.some((item) => item.id === id)) selectedQueue.delete(id);
+    for (const id of selectedHistory)
+      if (!history.some((item) => item.id === id)) selectedHistory.delete(id);
     for (const [id, row] of rows) {
       if (!ids.has(id)) {
         row.controller.abort();
@@ -560,6 +1038,114 @@
     $('clear-history').disabled = !history.length;
     $('export-history').disabled = !history.length;
     filterHistory();
+    renderBulkSelection();
+    renderAppUpdate();
+  }
+  function jobRemedy(download) {
+    const code = String(download.errorCode || '').toLowerCase();
+    return {
+      auth: { message: 'remedy_AUTH', action: 'fixAuthentication' },
+      network: { message: 'remedy_NETWORK', action: 'quickRetry' },
+      'rate-limit': { message: 'remedy_RATE_LIMIT', action: 'fixLimits' },
+      'tool-missing': { message: 'remedy_TOOL', action: 'fixTools' },
+      'disk-full': { message: 'remedy_DISK', action: 'fixFolder' },
+      unavailable: { message: 'remedy_UNAVAILABLE', action: 'copySourceLink' },
+      unsupported: { message: 'remedy_UNAVAILABLE', action: 'copySourceLink' },
+      stalled: { message: 'remedy_TIMEOUT', action: 'retryOptions' },
+      format: { message: 'remedy_FORMAT', action: 'retryOptions' },
+      integrity: { message: 'remedy_INTEGRITY', action: 'quickRetry' },
+    }[code];
+  }
+  async function runRemedy(row, button) {
+    if (!row) return;
+    const remedy = jobRemedy(row.download);
+    if (!remedy) return;
+    if (['quickRetry', 'retryOptions'].includes(remedy.action)) {
+      await runRowAction(remedy.action, row, button);
+      return;
+    }
+    if (remedy.action === 'fixAuthentication') {
+      openRetry(row.download, button);
+      $('retry-cookie-source').focus();
+      return;
+    }
+    if (remedy.action === 'fixFolder') {
+      await action(button, async () => {
+        const folder = await request('chooseDownloadDirectory');
+        if (folder && (await saveSettings({ downloadPath: folder }))) {
+          diskSpace = null;
+          applySettings();
+          openRetry(row.download, button);
+        }
+      });
+      return;
+    }
+    if (remedy.action === 'copySourceLink') {
+      await action(button, async () => {
+        await navigator.clipboard.writeText(row.download.url);
+        notice(t('sourceCopied'));
+      });
+      return;
+    }
+    openSettings(true);
+    if (remedy.action === 'fixTools') {
+      $('diagnose-tools').focus();
+      await runToolAction('yt-dlp', 'diagnose');
+    } else {
+      $('workflow-settings').open = true;
+      $('max-concurrent').focus();
+    }
+  }
+  function eligibleSelection(actionName) {
+    return (queue.queue || [])
+      .filter(
+        (item) =>
+          selectedQueue.has(item.id) &&
+          (actionName === 'pause'
+            ? ['pending', 'downloading'].includes(item.status)
+            : actionName === 'resume'
+              ? item.status === 'paused'
+              : actionName === 'move'
+                ? ['pending', 'paused'].includes(item.status)
+                : ['pending', 'paused', 'downloading'].includes(item.status)),
+      )
+      .map((item) => item.id);
+  }
+  function renderBulkSelection() {
+    $('queue-selected').textContent = t('selectedCount', { count: selectedQueue.size });
+    $('history-selected').textContent = t('selectedCount', { count: selectedHistory.size });
+    $('queue-select-all').disabled = bulkBusy || !(queue.queue || []).length;
+    $('queue-clear-selection').disabled = bulkBusy || !selectedQueue.size;
+    $('history-select-visible').disabled =
+      bulkBusy || !(queue.history || []).some((item) => !rows.get(item.id)?.element.hidden);
+    $('history-clear-selection').disabled = bulkBusy || !selectedHistory.size;
+    $('history-delete-selected').disabled = bulkBusy || !selectedHistory.size;
+    document.querySelectorAll('[data-queue-action]').forEach((button) => {
+      button.disabled = bulkBusy || !eligibleSelection(button.dataset.queueAction).length;
+    });
+  }
+  function syncSelection() {
+    for (const [id, row] of rows)
+      row.select.checked = selectedQueue.has(id) || selectedHistory.has(id);
+    renderBulkSelection();
+  }
+  async function runBulkAction(actionName) {
+    const ids = eligibleSelection(actionName);
+    if (bulkBusy || !ids.length) return;
+    bulkBusy = true;
+    renderBulkSelection();
+    try {
+      const input = { action: actionName, ids };
+      if (actionName === 'move') input.targetIndex = 0;
+      await request('queueAction', input);
+      ids.forEach((id) => selectedQueue.delete(id));
+      notice(t('bulkDone'));
+    } catch (error) {
+      notice(error.message, true);
+    } finally {
+      bulkBusy = false;
+      syncSelection();
+    }
   }
   function filterHistory() {
     const query = $('history-search').value.trim().toLocaleLowerCase(i18n.locale());
@@ -580,6 +1166,7 @@
     }
     $('history-empty').hidden = visible > 0;
     $('history-empty').textContent = t(history.length && query ? 'historyNoMatch' : 'historyEmpty');
+    renderBulkSelection();
   }
   function setQueue(next) {
     const previous = new Map(
@@ -600,11 +1187,20 @@
     retryOpener = opener;
     const options = download.options || {};
     $('retry-title').textContent = download.title || download.url;
+    $('retry-destination').textContent = t('ready', {
+      folder: settings.downloadPath || download.outputPath || '',
+    });
     $('retry-original-error').textContent = download.error || '';
     $('retry-original-error').hidden = !download.error;
     $('retry-quality').value = options.quality || 'best';
     $('retry-audio-format').value = options.audioFormat || 'original';
     $('retry-audio-format-field').hidden = $('retry-quality').value !== 'audio';
+    $('retry-format').value = options.formatId || '';
+    $('retry-rate').value = String(options.rateLimitKbps || 0);
+    $('retry-subtitles').checked = Boolean(options.subtitles);
+    $('retry-subtitle-lang').value = options.subtitleLang || 'en';
+    $('retry-subtitle-auto').checked = Boolean(options.subtitleAuto);
+    $('retry-subtitle-fields').hidden = !options.subtitles;
     $('retry-cookie-source').value = options.cookieFile ? 'file' : options.cookiesFromBrowser || '';
     $('retry-cookie-file').value = options.cookieFile || settings.cookieFilePath || '';
     $('retry-cookie-field').hidden = $('retry-cookie-source').value !== 'file';
@@ -655,13 +1251,28 @@
   }
   function renderPlaylistSelection() {
     const available = playlistRows.filter((row) => row.available);
+    const visible = available.filter((row) => !row.element.hidden);
     const selected = available.filter((row) => row.checkbox.checked);
     const busy = playlistLoading || playlistAdding;
     for (const row of playlistRows) row.checkbox.disabled = !row.available || busy;
-    $('playlist-select-all').disabled = busy || !playlistPreviewId || !available.length;
+    $('playlist-select-all').disabled = busy || !playlistPreviewId || !visible.length;
     $('playlist-clear-selection').disabled = busy || !selected.length;
     $('playlist-add-selected').disabled = busy || !playlistPreviewId || !selected.length;
     $('playlist-close').disabled = playlistAdding;
+    $('playlist-search').disabled = busy;
+    $('playlist-range').disabled = busy;
+    $('playlist-apply-range').disabled = busy || !playlistPreviewId;
+    $('playlist-previous').disabled = busy || playlistStart <= 1 || selected.length > 0;
+    $('playlist-next').disabled = busy || !playlistHasMore || selected.length > 0;
+    $('playlist-no-match').hidden =
+      !playlistRows.length || playlistRows.some((row) => !row.element.hidden);
+    $('playlist-page').textContent =
+      busy || !playlistRows.length
+        ? ''
+        : t('playlistPage', {
+            start: playlistStart,
+            end: Math.max(...playlistRows.map((row) => row.index)),
+          });
     $('playlist-status').textContent = playlistAdding
       ? t('playlistAdding')
       : playlistLoading
@@ -674,6 +1285,9 @@
   }
   function renderPlaylist(preview) {
     playlistPreviewId = preview.previewId;
+    playlistStart = Number.isInteger(preview.start) ? preview.start : playlistStart;
+    playlistPageSize = Number.isInteger(preview.pageSize) ? preview.pageSize : playlistPageSize;
+    playlistHasMore = Boolean(preview.hasMore);
     playlistRows = [];
     const entries = Array.isArray(preview.entries) ? preview.entries : [];
     const fragment = document.createDocumentFragment();
@@ -682,6 +1296,7 @@
       if (!Number.isInteger(entry.index) || entry.index < 1 || indices.has(entry.index)) continue;
       indices.add(entry.index);
       const item = create('li', '', fragment);
+      item.value = entry.index;
       const label = create('label', 'playlist-entry', item);
       const checkbox = create('input', '', label);
       checkbox.type = 'checkbox';
@@ -697,28 +1312,74 @@
         : entry.duration != null
           ? t('duration', { duration: duration(entry.duration) })
           : '';
-      playlistRows.push({ index: entry.index, checkbox, available });
+      playlistRows.push({
+        index: entry.index,
+        checkbox,
+        available,
+        element: item,
+        title: title.textContent,
+      });
     }
     $('playlist-list').replaceChildren(fragment);
     $('playlist-title').textContent = preview.title || '';
     $('playlist-limit').hidden = !preview.hasMore && entries.length <= 500;
-    $('playlist-limit').textContent = t('playlistLimit', {
-      count: Math.min(500, Number(preview.maxEntries) || 500),
-    });
+    $('playlist-limit').textContent = t('playlistLimit');
     renderPlaylistSelection();
   }
-  async function openPlaylist() {
+  function filterPlaylist() {
+    const query = $('playlist-search').value.trim().toLocaleLowerCase(i18n.locale());
+    for (const row of playlistRows)
+      row.element.hidden =
+        Boolean(query) &&
+        !`${row.index} ${row.title}`.toLocaleLowerCase(i18n.locale()).includes(query);
+    renderPlaylistSelection();
+  }
+  function selectPlaylistRange() {
+    const value = $('playlist-range').value.trim();
+    const ranges = value.split(',').map((part) => part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/));
+    const last = Math.max(playlistStart, ...playlistRows.map((row) => row.index));
+    if (
+      !value ||
+      ranges.some(
+        (match) =>
+          !match ||
+          Number(match[1]) < playlistStart ||
+          Number(match[2] || match[1]) < Number(match[1]) ||
+          Number(match[2] || match[1]) > last,
+      )
+    ) {
+      $('playlist-error').textContent = t('playlistRangeInvalid');
+      $('playlist-error').hidden = false;
+      $('playlist-range').setAttribute('aria-invalid', 'true');
+      return;
+    }
+    $('playlist-range').removeAttribute('aria-invalid');
+    $('playlist-error').hidden = true;
+    for (const row of playlistRows)
+      row.checkbox.checked =
+        row.available &&
+        ranges.some(
+          (match) => row.index >= Number(match[1]) && row.index <= Number(match[2] || match[1]),
+        );
+    renderPlaylistSelection();
+  }
+  async function openPlaylist(start = 1, paging = false) {
+    if (playlistAdding || playlistLoading) return;
+    if (paging && playlistRows.some((row) => row.checkbox.checked)) return;
     formError('');
     let url;
     let options;
     try {
-      url = parseUrls(true)[0];
-      options = downloadOptions();
+      url = paging ? playlistUrl : parseUrls(true)[0];
+      options = downloadOptions({ includeFormat: false });
     } catch (error) {
       formError(error.message);
       return;
     }
     const revision = ++playlistRevision;
+    playlistUrl = url;
+    playlistStart = start;
+    playlistHasMore = false;
     playlistLoading = true;
     playlistAdding = false;
     playlistPreviewId = null;
@@ -727,12 +1388,20 @@
     $('playlist-title').textContent = '';
     $('playlist-limit').hidden = true;
     $('playlist-error').hidden = true;
+    $('playlist-search').value = '';
+    $('playlist-range').value = '';
+    $('playlist-range').removeAttribute('aria-invalid');
     renderPlaylistSelection();
     renderReadiness();
-    $('playlist-dialog').showModal();
+    if (!$('playlist-dialog').open) $('playlist-dialog').showModal();
     $('playlist-close').focus();
     try {
-      const result = await request('previewPlaylist', { url, options });
+      const result = await request('previewPlaylist', {
+        url,
+        options,
+        start,
+        pageSize: playlistPageSize,
+      });
       if (revision !== playlistRevision || !$('playlist-dialog').open) return;
       playlistLoading = false;
       renderPlaylist(result);
@@ -771,7 +1440,7 @@
       const accepted = await request('addPlaylistSelection', {
         previewId: playlistPreviewId,
         indices,
-        options: downloadOptions(),
+        options: downloadOptions({ includeFormat: false }),
       });
       playlistAdding = false;
       closePlaylist(false);
@@ -793,6 +1462,9 @@
       diskSpace = state.diskSpace;
       queue = state.queue || { queue: [], history: [] };
       warnings = state.warnings || [];
+      privacy = state.privacy || {};
+      appUpdateState = state.appUpdate || appUpdateState;
+      toolSetup = state.tools?.setup || state.setup || null;
       $('app-version').textContent = state.version ? `v${state.version}` : '';
       $('startup').checked = Boolean(state.startupEnabled);
       initialized = true;
@@ -826,11 +1498,86 @@
   });
   listen($('quality'), 'change', () => {
     $('audio-format-field').hidden = $('quality').value !== 'audio';
+    $('format-select').value = '';
+    renderFormatDetails();
     void saveSettings({ quality: $('quality').value });
   });
   listen($('max-concurrent'), 'change', () => {
     void saveSettings({ maxConcurrent: Number($('max-concurrent').value) });
   });
+  listen($('theme'), 'change', () => {
+    document.documentElement.dataset.theme = $('theme').value;
+    void saveSettings({ theme: $('theme').value });
+  });
+  for (const [id, key] of Object.entries(numericSettings))
+    listen($(id), 'change', () => {
+      try {
+        void saveSettings({ [key]: readNumber(id) });
+      } catch (error) {
+        notice(error.message, true);
+      }
+    });
+  for (const [id, key] of Object.entries(booleanSettings))
+    listen($(id), 'change', () => {
+      void saveSettings({ [key]: $(id).checked });
+      if (id === 'schedule-enabled') $('schedule-fields').hidden = !$(id).checked;
+    });
+  for (const id of ['schedule-start', 'schedule-end'])
+    listen($(id), 'change', () => {
+      if (!/^\d{2}:\d{2}$/.test($(id).value)) {
+        notice(t('invalidTime'), true);
+        return;
+      }
+      void saveSettings({
+        [id === 'schedule-start' ? 'scheduleStart' : 'scheduleEnd']: $(id).value,
+      });
+    });
+  listen($('profile-select'), 'change', () => renderProfiles());
+  listen($('profile-apply'), 'click', () => action($('profile-apply'), applyProfile));
+  listen($('profile-save'), 'click', () => action($('profile-save'), saveProfile));
+  listen($('profile-delete'), 'click', () =>
+    action($('profile-delete'), async () => {
+      const id = $('profile-select').value;
+      if (!id) return;
+      if (!(await saveChain)) throw new Error(t('saveFailed'));
+      const saved = await request('deleteProfile', { id });
+      settings = { ...settings, ...saved };
+      renderProfiles('');
+      $('profile-status').textContent = t('profileDeleted');
+    }),
+  );
+  for (const actionName of ['check', 'download', 'install'])
+    listen($(`app-update-${actionName}`), 'click', () => {
+      void runAppUpdate(actionName);
+    });
+  listen($('app-update-release'), 'click', () =>
+    action($('app-update-release'), () => request('openExternal', appUpdateState.releaseUrl)),
+  );
+  document.querySelectorAll('[data-tool-action]').forEach((button) =>
+    listen(button, 'click', () => {
+      void runToolAction(button.dataset.tool, button.dataset.toolAction);
+    }),
+  );
+  listen($('tool-setup'), 'click', (event) => {
+    const copy = event.target.closest?.('[data-copy-command]');
+    const link = event.target.closest?.('[data-setup-url]');
+    if (copy)
+      void action(copy, async () => {
+        await navigator.clipboard.writeText(
+          $('tool-setup').querySelector('pre')?.textContent || '',
+        );
+        notice(t('commandCopied'));
+      });
+    if (link) void action(link, () => request('openExternal', link.dataset.setupUrl));
+  });
+  listen($('subtitles'), 'change', () => {
+    $('subtitle-fields').hidden = !$('subtitles').checked;
+  });
+  listen($('retry-subtitles'), 'change', () => {
+    $('retry-subtitle-fields').hidden = !$('retry-subtitles').checked;
+  });
+  listen($('format-select'), 'change', renderFormatDetails);
+  listen($('format-audio'), 'change', renderFormatDetails);
   listen($('recheck-tools'), 'click', () =>
     action($('recheck-tools'), async () => {
       if (!initialized) {
@@ -902,6 +1649,7 @@
     formError('');
     previewRevision++;
     $('preview-panel').hidden = true;
+    resetFormats();
   });
   listen($('preview-button'), 'click', () =>
     action($('preview-button'), async () => {
@@ -910,7 +1658,7 @@
       let options;
       try {
         urls = parseUrls(true);
-        options = downloadOptions();
+        options = downloadOptions({ includeFormat: false });
       } catch (error) {
         formError(error.message);
         return;
@@ -927,11 +1675,65 @@
         .filter(Boolean)
         .join(' · ');
       $('preview-url').textContent = preview?.webpageUrl || urls[0];
+      renderFormats(preview, urls[0]);
       $('preview-panel').hidden = false;
       announce($('preview-title').textContent);
     }),
   );
   listen($('history-search'), 'input', filterHistory);
+  for (const [id, selection] of [
+    ['queue-list', selectedQueue],
+    ['history-list', selectedHistory],
+  ])
+    listen($(id), 'change', (event) => {
+      const checkbox = event.target.closest?.('input[data-select-job]');
+      if (!checkbox) return;
+      if (checkbox.checked) selection.add(checkbox.dataset.selectJob);
+      else selection.delete(checkbox.dataset.selectJob);
+      renderBulkSelection();
+    });
+  listen($('queue-select-all'), 'click', () => {
+    (queue.queue || []).forEach((item) => selectedQueue.add(item.id));
+    syncSelection();
+  });
+  listen($('queue-clear-selection'), 'click', () => {
+    selectedQueue.clear();
+    syncSelection();
+  });
+  document.querySelectorAll('[data-queue-action]').forEach((button) =>
+    listen(button, 'click', () => {
+      void runBulkAction(button.dataset.queueAction);
+    }),
+  );
+  listen($('history-select-visible'), 'click', () => {
+    (queue.history || []).forEach((item) => {
+      if (!rows.get(item.id)?.element.hidden) selectedHistory.add(item.id);
+    });
+    syncSelection();
+  });
+  listen($('history-clear-selection'), 'click', () => {
+    selectedHistory.clear();
+    syncSelection();
+  });
+  listen($('history-delete-selected'), 'click', () => {
+    if (bulkBusy || !selectedHistory.size) return;
+    void (async () => {
+      bulkBusy = true;
+      renderBulkSelection();
+      try {
+        const result = await request('deleteHistory', { ids: [...selectedHistory] });
+        if (result?.deleted > 0) {
+          selectedHistory.clear();
+          notice(t('historyDeleted'));
+        }
+      } catch (error) {
+        notice(error.message, true);
+      } finally {
+        bulkBusy = false;
+        syncSelection();
+      }
+    })();
+  });
   listen($('playlist-preview-button'), 'click', () => {
     void openPlaylist();
   });
@@ -944,9 +1746,23 @@
     dialogKeydown(event, $('playlist-dialog'), closePlaylist),
   );
   listen($('playlist-list'), 'change', renderPlaylistSelection);
+  listen($('playlist-search'), 'input', filterPlaylist);
+  listen($('playlist-apply-range'), 'click', selectPlaylistRange);
+  listen($('playlist-range'), 'keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      selectPlaylistRange();
+    }
+  });
+  listen($('playlist-previous'), 'click', () => {
+    void openPlaylist(Math.max(1, playlistStart - playlistPageSize), true);
+  });
+  listen($('playlist-next'), 'click', () => {
+    void openPlaylist(playlistStart + playlistPageSize, true);
+  });
   listen($('playlist-select-all'), 'click', () => {
     playlistRows.forEach((row) => {
-      row.checkbox.checked = row.available;
+      if (!row.element.hidden) row.checkbox.checked = row.available;
     });
     renderPlaylistSelection();
   });
@@ -1001,6 +1817,14 @@
         ...cookieOptions($('retry-cookie-source').value, $('retry-cookie-file').value),
       };
       if (options.quality === 'audio') options.audioFormat = $('retry-audio-format').value;
+      if ($('retry-format').value.trim()) options.formatId = $('retry-format').value.trim();
+      const rate = readNumber('retry-rate');
+      if (rate) options.rateLimitKbps = rate;
+      options.subtitles = $('retry-subtitles').checked;
+      if (options.subtitles) {
+        options.subtitleLang = subtitleLanguage('retry-subtitle-lang');
+        options.subtitleAuto = $('retry-subtitle-auto').checked;
+      }
       if ($('retry-runtime').value !== 'auto') options.jsRuntime = $('retry-runtime').value;
       if ($('retry-ipv4').checked) options.forceIpv4 = true;
       for (const [id, key] of [
@@ -1045,6 +1869,13 @@
   if (api) {
     for (const [name, callback] of [
       ['onState', setQueue],
+      [
+        'onAppUpdate',
+        (state) => {
+          appUpdateState = state || { status: 'idle' };
+          renderAppUpdate();
+        },
+      ],
       [
         'onWarnings',
         (next) => {

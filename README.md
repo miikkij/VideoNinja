@@ -8,6 +8,10 @@ Choose a folder, paste video links and follow the queue in English or Finnish.
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) handles downloads; your settings and history
 stay on your computer.
 
+**The source tree is the unreleased 1.2.0 development version.** The downloads below
+are the published 1.1.0 release. The feature descriptions and guides describe
+1.2 development; its new controls are not present in the 1.1 installers.
+
 ## Download VideoNinja 1.1.0
 
 | Platform                          | Installer                                                                                                      | Alternative                                                                                                       |
@@ -21,11 +25,13 @@ stay on your computer.
 
 Packages are unsigned, and the macOS app is not notarized. This release does not
 include an Intel Mac build. Install the [download tools](#download-tools) separately,
-then follow the [quick start](QUICK_START.md) / [pikaohje](QUICK_START.fi.md).
+then follow the released version's
+[quick start](https://github.com/miikkij/VideoNinja/blob/v1.1.0/QUICK_START.md) /
+[pikaohje](https://github.com/miikkij/VideoNinja/blob/v1.1.0/QUICK_START.fi.md).
 
 ## Screenshots
 
-The actual VideoNinja 1.1.0 interface on Windows, shown with sample data.
+The actual VideoNinja interface on Windows, shown with isolated sample data.
 Click an image to open it at full size.
 
 **Paste links, choose a quality and start downloading.**
@@ -62,6 +68,13 @@ set the maximum number of simultaneous downloads.
 
 </details>
 
+<details>
+<summary>Dark theme / Tumma teema suomeksi</summary>
+
+[![VideoNinja main window in Finnish using the dark theme](docs/screenshots/overview-dark-fi.png)](docs/screenshots/overview-dark-fi.png)
+
+</details>
+
 ## Start here
 
 - [Quick start](QUICK_START.md) / [Pikaohje suomeksi](QUICK_START.fi.md)
@@ -73,36 +86,42 @@ set the maximum number of simultaneous downloads.
 
 ## Features
 
-- English and Finnish interface, selectable in the header and saved between launches.
-- Paste up to 100 HTTP(S) links at once, one per line. Enter submits; Shift+Enter adds a line.
-- Choose 1–5 simultaneous downloads, with pause, resume, cancellation and queue reordering.
-- Preview a playlist and select which of its first 500 entries to add.
-- Best available, 2160p, 1440p, 1080p, 720p and 480p quality limits.
-- Audio-only download in the original format or conversion to MP3, M4A, Opus or WAV.
-- Optional metadata preview before downloading.
-- Download and merge progress, speed, remaining time and real disk-space status.
-- Searchable history, retry with revised options, export and confirmed clearing.
-- Open a verified completed media file or reveal it in its folder.
-- Optional cookies, start at login and tray operation.
-- Keyboard controls, persistent errors, reduced-motion support and a responsive layout.
+- English/Finnish interface, keyboard controls and light, dark or system theme.
+- Up to 100 links per ordinary batch, 500 queued jobs and 1–5 concurrent downloads.
+- Individual and selected-job pause, resume, cancellation and reordering.
+- Playlist previews with search, range selection and pages beyond the first 500 entries.
+- Quality presets, actual source formats/codecs/resolutions/size estimates and audio conversion.
+- Named profiles, subtitle languages, automatic captions and per-job speed limits.
+- Total speed limit, local-time download windows, bounded automatic retries and stall detection.
+- Disk-space reservations based on available size estimates and a configurable free-space floor.
+- Source-ID duplicate archive, searchable history, selective deletion and age-based retention.
+- Private jobs and optional OS-backed encryption of saved settings and activity.
+- Optional grouped desktop notifications and verified completed-file actions.
+- Managed download-tool installation/update, EJS diagnostics and application update checks.
 
 The queue holds up to 500 jobs and history keeps the latest 100 entries.
 Paused jobs remain paused after restart; interrupted active jobs return to the queue.
-Resume depends on the source server and yt-dlp's continuation support.
-The default is one simultaneous download. Change **Maximum simultaneous downloads**
-in Settings; reducing it lets active jobs finish before enforcing the lower limit.
-Duplicate URLs in one submitted batch are added once. Repeated jobs for the same
-URL and destination run sequentially even when other downloads run in parallel.
+Private jobs are excluded from saved state and history. Resume depends on the
+source server and yt-dlp's continuation support. The default concurrency is one.
+Lowering it lets active jobs finish when no total speed limit is enabled. Changing
+an active total speed limit, or concurrency while that limit is enabled, restarts
+transfers with preserved partial files to apply the new allocation.
 
 Use **Choose from playlist** to inspect the first pasted link, select available
 videos and choose **Add selected to queue**. Previewing fetches metadata without
-downloading media files or adding jobs. Unavailable entries cannot be selected.
-The preview expires after 15 minutes and shows a notice when the playlist extends
-beyond the first 500 entries. Ordinary **Add to queue** never expands a whole playlist.
+downloading media files or adding jobs. Each page contains at most 500 entries;
+add or clear its selection before changing pages. Previews expire after 15 minutes.
+Ordinary **Add to queue** never expands a whole playlist. Duplicate URLs in a batch
+are added once; jobs for the same URL and folder run sequentially.
+
+See the [20-item implementation record](docs/DEVELOPMENT_PLAN.md) for the exact
+scope, defaults and verification limits.
 
 ## Download tools
 
-Install these separately; VideoNinja does not bundle or silently install them.
+Download tools are separate executables. In 1.2 development, Settings offers
+explicit installation/update and setup instructions; nothing installs silently.
+The released 1.1 app requires manual installation through the links below.
 
 | Tool                                                                    | Purpose                                                    |
 | ----------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -110,12 +129,22 @@ Install these separately; VideoNinja does not bundle or silently install them.
 | [ffmpeg and ffprobe](https://ffmpeg.org/download.html)                  | Merge video/audio streams and convert audio.               |
 | [JavaScript runtime and EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS) | Required for full YouTube support.                         |
 
-Tools are discovered beside the executable, on PATH and in common platform
-installation folders. Settings shows yt-dlp and ffmpeg paths and versions,
-plus detected runtime versions.
+Managed yt-dlp and Deno installation is supported on Windows, Linux and macOS
+x64/ARM64. Managed ffmpeg/ffprobe installation supports Windows and Linux;
+macOS uses guided Homebrew installation. Downloads use official upstream release
+sources and their SHA-256 manifests, then stage and verify executables before
+replacing the previous managed version. Tools installed by another method remain
+under that method's control.
+
+Managed tools under the app's user-data folder take discovery priority, followed
+by executable/PATH and common installation locations. Settings shows detected
+paths and versions. `VIDEONINJA_TOOLS_DIR` selects an isolated managed directory
+for development and testing.
 Automatic runtime selection prefers Deno 2.3+ and then Node.js 22+; QuickJS is also
 supported. Electron's internal Node runtime is not a standalone yt-dlp runtime.
-A successful version check does not verify that matching EJS scripts are installed.
+**Check YouTube support** inspects the installed EJS package/runtime and, when
+available, compares EJS with the exact yt-dlp revision's expected version. It is
+not a live YouTube challenge test or a guarantee that a video is accessible.
 
 After changing tools, choose **Check tools again**. Restart VideoNinja if its
 inherited PATH needs to change.
@@ -150,7 +179,10 @@ Build on the target operating system with `pnpm build:win`, `pnpm build:mac`
 or `pnpm build:linux`. Builds never publish automatically.
 The CI matrix checks source and packaged applications on all three systems.
 Version and artifact checks prevent mismatched releases. A tag-triggered release
-workflow creates a draft for review; signing and notarization are not configured.
+workflow creates a draft for review. Signing/notarization and update manifests
+are supported by the build scripts, but signing credentials are not configured
+and no signed release has been published. See the exact
+[release prerequisites](CONTRIBUTING.md#signing-and-application-updates).
 
 Electron 44 requires macOS 13 or newer and 64-bit platforms. The CI matrix covers
 current hosted operating systems; it does not establish compatibility with every
@@ -160,6 +192,7 @@ older distribution or desktop environment.
 pnpm check
 pnpm run audit
 pnpm test:smoke
+pnpm test:features
 pnpm test:media
 ```
 
@@ -170,15 +203,25 @@ and sandbox requirements, packaging checks and release responsibilities.
 
 ## Privacy and limitations
 
-URLs, paths and selected download options are stored locally in an unencrypted
-profile. Keep cookie files private. Clearing history removes history records,
-not downloaded files. Export omits local paths, authentication options and errors,
-and strips URL credentials, queries and fragments; review titles and URLs before sharing.
+Saved settings/activity are plaintext by default. Optional OS-backed encryption
+protects that saved payload when the OS provides a supported secret store; it
+does not encrypt media, cookies or old backups. Private jobs are kept only in
+memory and disappear on exit. History deletion never removes media files.
+Export omits local paths, authentication options and errors, and strips URL
+credentials, queries and fragments; review titles and URLs before sharing.
+
+Startup update checks contact GitHub and can be disabled in Settings. Application
+download and installation require explicit actions. Unsigned Windows/macOS builds,
+portable Windows, Debian packages and source runs use the release page instead
+of automatic installation. The public 1.1 release has no application updater.
 
 Additional yt-dlp options use a small allowlist. Arbitrary commands, plugins,
 configuration files and automatic remote-component fetching are disabled.
 Audio-only requires an available audio format and does not fall back to a video.
 Third-party site changes, login restrictions and DRM can prevent downloading.
+Completion checks a nonempty final file and, when ffprobe is present, its container
+and media streams. Without ffprobe the result explicitly reports size-only
+verification. Neither check guarantees every frame can be decoded.
 Download only content you have permission to save.
 
 For known environmental restrictions and the remaining build-only dependency

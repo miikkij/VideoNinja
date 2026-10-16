@@ -25,6 +25,7 @@ function setup(
     stat: vi.fn(async (filename) => ({
       isDirectory: () => filename === root,
       isFile: () => filename !== root,
+      size: filename === root ? 0 : 1024,
     })),
     access: vi.fn(async () => {}),
     statfs: vi.fn(async () => ({ blocks: 1000n, bsize: 4096n, bavail: 200n, bfree: 250n })),
@@ -44,6 +45,26 @@ function setup(
 }
 
 describe('production argument builder', () => {
+  it('uses exact formats, automatic subtitles and a structured speed cap after advanced flags', () => {
+    const args = buildDownloadArgs(
+      'https://example.com/',
+      root,
+      {
+        formatId: '137+140',
+        rateLimitKbps: 512,
+        extraArgs: '--limit-rate 2M',
+        subtitles: true,
+        subtitleAuto: true,
+        subtitleLang: 'fi,en',
+      },
+      yt,
+      ffmpeg,
+    );
+    expect(args[args.indexOf('-f') + 1]).toBe("all[format_id='137']+all[format_id='140']");
+    expect(args[args.lastIndexOf('--limit-rate') + 1]).toBe('512K');
+    expect(args).toContain('--write-auto-subs');
+    expect(args[args.indexOf('--sub-langs') + 1]).toBe('fi,en');
+  });
   it('isolates config/plugins/remote code and uses literal final URL, tool paths and source IDs', () => {
     const url = 'https://example.com/watch?a=1&b=$(literal)';
     const args = buildDownloadArgs(
@@ -125,6 +146,90 @@ describe('production argument builder', () => {
 });
 
 describe('download result protocol', () => {
+  it('rejects a zero-length media file and reports size-only validation when ffprobe is absent', async () => {
+    const missingProbe = setup();
+    expect(
+      (await missingProbe.service.downloadVideo('https://example.com/', root)).integrity,
+    ).toMatchObject({ status: 'size-only', size: 1024, warning: expect.any(String) });
+    missingProbe.fileSystem.stat.mockImplementation(async (filename) => ({
+      isDirectory: () => filename === root,
+      isFile: () => filename !== root,
+      size: 0,
+    }));
+    expect(await missingProbe.service.downloadVideo('https://example.com/', root)).toMatchObject({
+      success: false,
+      error: expect.stringContaining('empty'),
+    });
+  });
+  it.each(['valid', 'invalid-json', 'no-stream', 'failed', 'abort'])(
+    'validates ffprobe output before completing: %s',
+    async (mode) => {
+      const controller = new AbortController();
+      const progress = vi.fn();
+      const probePath = path.resolve('tools/ffprobe');
+      const { service, tools, runProcess } = setup(async (executable, _args, handlers) => {
+        if (executable === probePath) {
+          handlers.onStdoutLine(
+            mode === 'invalid-json'
+              ? 'invalid'
+              : JSON.stringify({
+                  format: { duration: '5.2' },
+                  streams:
+                    mode === 'no-stream'
+                      ? []
+                      : [
+                          { codec_type: 'video', codec_name: 'h264' },
+                          { codec_type: 'audio', codec_name: 'aac' },
+                        ],
+                }),
+          );
+          if (mode === 'abort') controller.abort();
+          return { code: mode === 'failed' ? 1 : 0 };
+        }
+        handlers.onStdoutLine(`${PROTOCOL.file}${JSON.stringify(finalFile)}`);
+        return { code: 0 };
+      });
+      tools.checkFfprobeAvailability = vi.fn(async () => ({ available: true, path: probePath }));
+      const result = service.downloadVideo('https://example.com/', root, {}, progress, {
+        signal: controller.signal,
+      });
+      if (mode === 'abort') await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+      else if (mode === 'valid')
+        expect((await result).integrity).toMatchObject({
+          status: 'verified',
+          duration: 5.2,
+          streams: [
+            { type: 'video', codec: 'h264' },
+            { type: 'audio', codec: 'aac' },
+          ],
+        });
+      else expect((await result).success).toBe(false);
+      expect(runProcess.mock.calls[1][1]).toEqual(
+        expect.arrayContaining(['-protocol_whitelist', 'file', finalFile]),
+      );
+      if (mode !== 'valid')
+        expect(progress).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+    },
+  );
+  it('rejects unavailable or wrongly paired explicit formats before downloading', async () => {
+    const { service, runProcess } = setup(async (_file, _args, handlers) => {
+      handlers.onStdoutLine(
+        `${PROTOCOL.metadata}${JSON.stringify({
+          title: 'Fixture',
+          formats: [
+            { format_id: '137', vcodec: 'h264', acodec: 'none' },
+            { format_id: '140', vcodec: 'none', acodec: 'aac' },
+          ],
+        })}`,
+      );
+      return { code: 0 };
+    });
+    for (const formatId of ['999', 'best', '140+137'])
+      expect(
+        (await service.downloadVideo('https://example.com/', root, { formatId })).success,
+      ).toBe(false);
+    expect(runProcess.mock.calls.every((call) => call[1].includes('--skip-download'))).toBe(true);
+  });
   it('uses verified after-move output instead of intermediate destinations', async () => {
     const progress = vi.fn();
     const { service } = setup(async (_file, _args, handlers) => {
@@ -283,6 +388,44 @@ describe('download result protocol', () => {
 });
 
 describe('metadata and disk space', () => {
+  it('bounds format metadata and drops signed URLs and invalid selectors', async () => {
+    const formats = Array.from({ length: 250 }, (_, i) => ({
+      format_id: String(i + 100),
+      ext: 'mp4',
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      vcodec: 'avc1.640028',
+      acodec: 'none',
+      filesize: 12345,
+      url: 'https://cdn.example/?token=secret',
+      http_headers: { Cookie: 'secret' },
+    }));
+    formats[0].format_id = 'best[height=1]';
+    const { service, runProcess } = setup(async (_file, _args, handlers) => {
+      handlers.onStdoutLine(
+        `${PROTOCOL.metadata}${JSON.stringify({ title: 'Video', extractor: 'Youtube', id: 'source', filesize: 123, filesizeApprox: 456, formats })}`,
+      );
+      return { code: 0 };
+    });
+    const result = await service.fetchMetadata('https://example.com/');
+    expect(result).toMatchObject({
+      extractor: 'Youtube',
+      id: 'source',
+      filesize: 123,
+      filesizeApprox: 456,
+    });
+    expect(result.formats).toHaveLength(199);
+    expect(result.formats[0]).toMatchObject({
+      formatId: '101',
+      hasVideo: true,
+      hasAudio: false,
+      height: 1080,
+    });
+    expect(JSON.stringify(result)).not.toContain('secret');
+    const args = runProcess.mock.calls[0][1];
+    expect(args[args.indexOf('--print') + 1]).not.toContain('url');
+  });
   it('fetches only bounded display metadata without downloading', async () => {
     const { service, runProcess } = setup(async (_file, _args, handlers) => {
       handlers.onStdoutLine(
@@ -295,6 +438,10 @@ describe('metadata and disk space', () => {
       duration: 15,
       id: 'x',
       ext: 'webm',
+      extractor: '',
+      filesize: null,
+      filesizeApprox: null,
+      formats: [],
     });
     expect(runProcess.mock.calls[0][1]).toContain('--simulate');
     expect(runProcess.mock.calls[0][1]).toContain('--skip-download');
@@ -330,6 +477,25 @@ describe('metadata and disk space', () => {
 });
 
 describe('bounded playlist preview', () => {
+  it('paginates beyond 500 using absolute indexes and one extra sentinel', async () => {
+    const { service, runProcess } = playlistService(preview([entry(501), entry(502), entry(503)]));
+    const result = await service.fetchPlaylist(
+      'https://example.com/list',
+      {},
+      { start: 501, pageSize: 2 },
+    );
+    expect(result).toMatchObject({ start: 501, pageSize: 2, hasMore: true });
+    expect(result.entries.map((item) => item.index)).toEqual([501, 502]);
+    const args = runProcess.mock.calls[0][1];
+    expect(args[args.indexOf('--playlist-start') + 1]).toBe('501');
+    expect(args[args.indexOf('--playlist-end') + 1]).toBe('503');
+    await expect(
+      service.fetchPlaylist('https://example.com/list', {}, { start: 0 }),
+    ).rejects.toThrow('page');
+    await expect(
+      service.fetchPlaylist('https://example.com/list', {}, { pageSize: 501 }),
+    ).rejects.toThrow('page');
+  });
   const entry = (index, overrides = {}) => ({
     id: `item-${index}`,
     title: `Video ${index}`,
@@ -361,6 +527,8 @@ describe('bounded playlist preview', () => {
     );
     expect(result).toEqual({
       title: 'Owned list',
+      start: 1,
+      pageSize: 500,
       entries: [
         {
           id: 'item-1',

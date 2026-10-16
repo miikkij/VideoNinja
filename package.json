@@ -1,15 +1,15 @@
 {
   "name": "video-ninja",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A desktop video download queue built with Electron and yt-dlp",
   "main": "src/main/index.js",
   "scripts": {
     "start": "node scripts/start.js",
     "clean": "rimraf dist node_modules/.cache",
-    "build": "electron-builder --publish never",
-    "build:mac": "electron-builder --mac --publish never",
-    "build:win": "electron-builder --win --publish never",
-    "build:linux": "electron-builder --linux --publish never",
+    "build": "electron-builder --config scripts/build-config.cjs --publish never",
+    "build:mac": "electron-builder --config scripts/build-config.cjs --mac --publish never",
+    "build:win": "electron-builder --config scripts/build-config.cjs --win --publish never",
+    "build:linux": "electron-builder --config scripts/build-config.cjs --linux --publish never",
     "postinstall": "install-electron && electron-builder install-app-deps",
     "lint": "eslint src/ scripts/ tests/ *.mjs --max-warnings 0",
     "lint:fix": "eslint src/ scripts/ tests/ *.mjs --fix",
@@ -19,6 +19,7 @@
     "audit": "pnpm audit --audit-level high && pnpm audit --prod",
     "test:smoke": "node scripts/smoke-test.mjs",
     "test:media": "node scripts/media-smoke.mjs",
+    "test:features": "node scripts/features-smoke.mjs",
     "release:verify": "node scripts/verify-release.mjs"
   },
   "engines": {
@@ -39,7 +40,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "electron-store": "^12.0.0"
+    "electron-store": "^12.0.0",
+    "electron-updater": "6.8.9"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -49,6 +51,7 @@
     "eslint": "^10.13.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.13.0",
+    "js-yaml": "4.3.2",
     "jsdom": "^30.1.3",
     "playwright": "^1.64.1",
     "prettier": "^3.9.10",

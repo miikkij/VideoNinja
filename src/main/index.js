@@ -10,13 +10,20 @@ const {
   protocol,
   net,
   screen,
+  safeStorage,
+  Notification,
 } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const tools = require('./ytdlp');
 const DownloadQueue = require('./downloadQueue');
 const { createHandlers, registerIpc, APP_URL } = require('./ipc');
 const { createStartup } = require('./startup');
+const { createPrivateStore } = require('./privateStore');
+const { createNotifications } = require('./notifications');
+const { createAppUpdater } = require('./appUpdater');
+const { createToolManager } = require('./toolManager');
 const {
   readConfiguration,
   loadPersistedState,
@@ -62,11 +69,16 @@ let settings;
 let startup;
 let persistence;
 let services;
+let toolManager;
+let appUpdater;
+let notifications;
+let updateTimer;
 let diskTimer;
 let toolCheck;
 let toolController;
 let quitting = false;
 let quitAllowed = false;
+let installingUpdate = false;
 let warnings = [];
 let toolState = {
   ytdlp: { available: false, checking: true, path: null, version: null, jsRuntimes: [] },
@@ -98,7 +110,7 @@ async function recheckTools() {
     const failure = results.find((result) => result.status === 'rejected');
     if (failure) throw failure.reason;
     const [ytdlp, ffmpeg] = results.map((result) => result.value);
-    toolState = { ytdlp, ffmpeg };
+    toolState = { ytdlp, ffmpeg, setup: toolManager?.getSetupPlan() };
     send('tools', toolState);
     return toolState;
   })();
@@ -244,17 +256,62 @@ async function initialize() {
   });
   const restored = await readConfiguration(path.join(app.getPath('userData'), 'config.json'));
   const { default: Store } = await import('electron-store');
-  store = new Store({ clearInvalidConfig: false });
+  store = createPrivateStore(new Store({ clearInvalidConfig: false }), safeStorage);
   const state = loadPersistedState(store);
   settings = state.settings;
   warnings = [...restored.warnings, ...state.warnings];
   store.set('schemaVersion', 1);
   store.set('settings', settings);
-  queue = new DownloadQueue();
+  const configuredToolsDir = process.env.VIDEONINJA_TOOLS_DIR;
+  if (configuredToolsDir && !path.isAbsolute(configuredToolsDir))
+    throw new Error('The managed tools path must be absolute.');
+  const managedDir = path.resolve(
+    configuredToolsDir || path.join(app.getPath('userData'), 'tools'),
+  );
+  process.env.VIDEONINJA_TOOLS_DIR = managedDir;
+  toolManager = createToolManager({ managedDir });
+  queue = new DownloadQueue({
+    prepareDownload: (...args) => tools.fetchMetadata(...args),
+    getDiskSpace: (...args) => tools.getDiskSpace(...args),
+  });
   persistence = attachQueuePersistence(queue, store, {
     onError: () => warn('QUEUE_SAVE_FAILED'),
   });
   startup = createStartup(app);
+  notifications = createNotifications({ Notification, getSettings: () => settings, showWindow });
+  let policy = {};
+  try {
+    policy = JSON.parse(
+      fs.readFileSync(path.join(process.resourcesPath, 'update-policy.json'), 'utf8'),
+    );
+  } catch {
+    /* Unsigned/source builds use manual downloads. */
+  }
+  appUpdater = createAppUpdater({
+    app,
+    policy,
+    updater: app.isPackaged ? require('electron-updater').autoUpdater : null,
+    onState: (value) => send('app-update', value),
+    beforeInstall: async () => {
+      if (quitting || installingUpdate || queue.getQueueState().isProcessing)
+        throw new Error('The application is not ready to install an update.');
+      const releaseScheduling = queue.holdScheduling();
+      const release = () => {
+        installingUpdate = false;
+        releaseScheduling({ start: !quitting });
+      };
+      installingUpdate = true;
+      try {
+        if (!persistence.checkpoint()) throw new Error('The queue could not be saved.');
+        // Native installers can fail without quitting. Keep cleanup in before-quit
+        // and return a reversible admission lock for the updater's error handler.
+        return release;
+      } catch (error) {
+        release();
+        throw error;
+      }
+    },
+  });
   try {
     await startup.isEnabled();
   } catch {
@@ -268,19 +325,27 @@ async function initialize() {
     getSettings: () => settings,
     tools,
     startup,
+    toolManager,
+    appUpdater,
+    privacyStatus: () => store.status(),
+    hasToolCheck: () => Boolean(toolCheck),
+    isInstallingUpdate: () => installingUpdate,
     canHideWindow: () => Boolean(tray),
     putSettings: async (value) => {
+      if (quitting || installingUpdate) throw new Error('The application is restarting.');
       store.set('settings', value);
       settings = value;
-      queue.setConcurrency(settings.maxConcurrent);
+      queue.setConcurrency(settings.maxConcurrent, { start: false });
+      queue.configure(settings);
       updateTray();
       await checkDisk();
     },
     recheckTools,
     getInitialState: async () => {
-      const [currentTools, startupEnabled] = await Promise.all([
+      const [currentTools, startupEnabled, updateState] = await Promise.all([
         toolCheck || Promise.resolve(toolState),
         startup.isEnabled().catch(() => false),
+        appUpdater.action('status'),
       ]);
       // Queue transitions can happen during native checks. Snapshot only once
       // those checks have finished so initial rendering cannot replay old jobs.
@@ -292,6 +357,8 @@ async function initialize() {
         diskSpace: diskState,
         startupEnabled,
         warnings,
+        privacy: store.status(),
+        appUpdate: updateState,
       };
     },
   });
@@ -301,6 +368,8 @@ async function initialize() {
     updateTray();
   });
   queue.on('download-progress', (value) => send('progress', value));
+  queue.on('download-completed', (job) => notifications.record('completed', job));
+  queue.on('download-failed', (job) => notifications.record('failed', job));
   if (!silent) {
     try {
       tray = new Tray(nativeImage.createFromPath(ICONS['icon-normal']));
@@ -313,6 +382,7 @@ async function initialize() {
   createWindow();
   queue.loadState(state.queueState, { start: false });
   queue.setConcurrency(settings.maxConcurrent, { start: false });
+  queue.configure(settings, { start: false });
   queue.processNext();
   void recheckTools().catch(() => {
     if (quitting) return;
@@ -324,6 +394,13 @@ async function initialize() {
   diskTimer = setInterval(() => {
     void checkDisk();
   }, 30000);
+  if (app.isPackaged && !silent && settings.checkUpdatesOnStartup) {
+    updateTimer = setTimeout(() => {
+      if (settings.checkUpdatesOnStartup && !quitting)
+        void appUpdater.action('check').catch(() => {});
+    }, 15000);
+    updateTimer.unref();
+  }
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -344,9 +421,17 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting) return;
     quitting = true;
     clearInterval(diskTimer);
+    clearTimeout(updateTimer);
+    notifications?.dispose();
+    const stoppingUpdater = appUpdater?.dispose();
     const pendingToolCheck = toolCheck;
     toolController?.abort();
-    Promise.all([services?.dispose(), queue.shutdown(), pendingToolCheck?.catch(() => {})])
+    Promise.all([
+      services?.dispose(),
+      queue.shutdown(),
+      pendingToolCheck?.catch(() => {}),
+      stoppingUpdater,
+    ])
       .then(() => persistence.checkpoint())
       .catch(() => {
         // Do not print persisted URLs/options or process output.

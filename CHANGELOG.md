@@ -2,6 +2,50 @@
 
 All notable changes to VideoNinja are recorded here.
 
+## [Unreleased] - 1.2.0 development
+
+Public download links still point to 1.1.0. No 1.2 release or signed binaries have
+been published.
+
+### Added
+
+- Explicit managed yt-dlp/Deno installation and updates; managed Windows/Linux
+  ffmpeg/ffprobe and guided macOS ffmpeg setup, with upstream checksum verification,
+  staging, version probes and rollback.
+- Installed EJS/runtime diagnosis and exact-revision compatibility checks when
+  available; this does not test a live YouTube challenge.
+- Classified actionable errors, bounded automatic retries, disk reservations and
+  separate download/processing stall watchdogs.
+- Queue multiselect and bulk actions; source-ID duplicate archive with file checks.
+- Real format/codec/resolution/size preview and validated concrete format selection.
+- Named download profiles, subtitle language selection and automatic captions.
+- Playlist search, range selection and paging beyond the first 500 entries.
+- Per-job and total bandwidth limits, local-time schedule windows and optional
+  grouped desktop notifications.
+- Selective history deletion, age retention, private jobs and optional OS-backed
+  encryption of saved settings and activity.
+- ffprobe container/stream validation of completed media, with explicit size-only
+  status when ffprobe is unavailable.
+- Light/dark/system themes and refreshed screenshots, including Finnish dark mode.
+- Application update checks and explicit download/install flow; signing and macOS
+  notarization configuration with update manifests. Credentials remain unconfigured.
+- Three-OS real-media CI setup and a separate real-Electron feature smoke.
+
+### Changed
+
+- Positive total speed limits are distributed between configured slots. Changing
+  the cap or capped concurrency restarts transfers after process settlement,
+  preserving partial files.
+- Scheduling pauses active jobs outside the window and resumes only jobs paused
+  by the schedule. Private jobs never enter saved queue/history/archive records.
+- Config read/write limits are shared: 32 MiB serialized profile and 20 MiB
+  settings/activity payload, including encrypted envelopes.
+- Release validation covers update manifests, versions, hashes and packaged
+  update policy. Release workflows still create reviewable drafts only.
+
+See the [20-item implementation and verification record](docs/DEVELOPMENT_PLAN.md)
+for defaults and remaining environment/release checks.
+
 ## [1.1.0] - 2026-10-16
 
 ### Added

@@ -1,260 +1,201 @@
 # Architecture
 
-This document describes the version 1.1 implementation. Release validation and
-remaining work are tracked in the [development plan](DEVELOPMENT_PLAN.md).
+This describes **1.2.0 development**, not the published 1.1.0 packages. See the
+[implementation record](DEVELOPMENT_PLAN.md) for verification and release boundaries.
 
-## Runtime and module boundaries
+## Runtime boundaries
 
 ```mermaid
 flowchart LR
-    UI["Renderer: HTML, CSS, app.js, i18n.js"] -->|Explicit bridge methods| PRE["Sandboxed preload"]
-    PRE -->|Validated IPC| MAIN["Main process"]
-    MAIN -->|State and progress events| PRE
-    PRE --> UI
-    MAIN <--> STORE["Validated local config.json"]
-    MAIN --> QUEUE["DownloadQueue: 1 to 5 active jobs"]
-    QUEUE --> ADAPTER["yt-dlp adapter"]
-    ADAPTER --> RUNNER["Process runner: shell disabled"]
-    RUNNER --> YTDLP["External yt-dlp"]
-    YTDLP --> TOOLS["ffmpeg and selected JS runtime"]
-    YTDLP --> MEDIA["Media in the chosen folder"]
+    UI[Renderer] -->|Explicit methods| PRE[Sandboxed preload]
+    PRE -->|Validated IPC| MAIN[Main process]
+    MAIN --> QUEUE[Download queue]
+    QUEUE --> ADAPTER[yt-dlp adapter]
+    ADAPTER --> RUNNER[Shell-free process runner]
+    RUNNER --> TOOLS[yt-dlp / ffmpeg / ffprobe / runtime]
+    MAIN --> STORE[Validated storage and optional OS encryption]
+    MAIN --> MANAGER[Explicit tool manager]
+    MAIN --> UPDATER[Application update service]
 ```
 
-There is no application backend, remote database or frontend build step. A
-restricted custom protocol serves packaged renderer resources. Downloads and
-video/playlist metadata previews access source services through external yt-dlp.
+There is no application server, remote database or frontend bundler. A restricted
+`videoninja://app/` protocol serves local resources. Renderer Node integration is
+disabled; context isolation, sandboxing and CSP are enabled. Navigation, webviews
+and new windows are denied. Untrusted titles/errors enter the DOM as text.
 
-| Module                                                   | Responsibility                                                                                          |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `src/main/index.js`                                      | Application/window/tray lifecycle, resource protocol, initial state, tool/disk status and shutdown.     |
-| `src/main/ipc.js`                                        | Sender and payload validation, native dialogs, explicit commands and safe file actions.                 |
-| `src/preload.js`                                         | Frozen `window.videoNinja` API and removable event subscriptions.                                       |
-| `src/main/downloadOptions.js`                            | HTTP(S) URL validation, quality presets and allowlisted option normalization.                           |
-| `src/main/downloadQueue.js`                              | Stable-ID queue state machine, cancellation, pause/resume, retries and history.                         |
-| `src/main/persistence.js`                                | Schema migration, bounded validation, error redaction, corrupt-file quarantine and durable checkpoints. |
-| `src/main/tools.js`                                      | External executable discovery and bounded version probes.                                               |
-| `src/main/processRunner.js`                              | Shell-free processes, UTF-8 line framing, bounded output and process-tree cancellation.                 |
-| `src/main/ytdlp.js`                                      | yt-dlp arguments/protocol, metadata, final file verification and disk-space measurement.                |
-| `src/main/startup.js`                                    | Native login items or owned Linux XDG autostart entry.                                                  |
-| `src/renderer/app.js`, `i18n.js`, `styles.css`           | Text-only DOM updates, queue/history interactions, English/Finnish strings and layout.                  |
-| `tests/`, `scripts/*smoke.mjs`, `scripts/smoke-test.mjs` | Unit/DOM coverage, real media pipeline and Electron application checks.                                 |
+| Module                                         | Responsibility                                                                                              |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `src/main/index.js`                            | Window/tray lifecycle, initial state, service wiring and coordinated shutdown.                              |
+| `src/main/ipc.js`                              | Window/frame and payload validation, dialogs, playlist cache, profiles, bulk actions and safe file actions. |
+| `src/preload.js`                               | Frozen narrow bridge and removable event subscriptions.                                                     |
+| `src/main/downloadOptions.js`                  | Canonical HTTP(S) URL and allowlisted option validation.                                                    |
+| `src/main/downloadQueue.js`                    | Scheduling, concurrency, retries, reservations, archive, history and progress events.                       |
+| `src/main/downloadErrors.js`                   | Bounded error classification and retry eligibility.                                                         |
+| `src/main/persistence.js`                      | Settings/state migration, recovery and durable checkpoints.                                                 |
+| `src/main/privateStore.js`, `storageLimits.js` | Atomic settings/activity storage, OS encryption and common read/write limits.                               |
+| `src/main/tools.js`, `toolManager.js`          | Discovery, probes, EJS diagnosis, verified managed installs and guided setup.                               |
+| `src/main/processRunner.js`                    | Bounded UTF-8 output, process-tree cancellation and shell-free execution.                                   |
+| `src/main/ytdlp.js`                            | Arguments, projected metadata, paging, final-path/integrity checks and disk measurement.                    |
+| `src/main/appUpdater.js`, `notifications.js`   | Explicit application updates and opt-in grouped notifications.                                              |
+| `src/main/startup.js`                          | Native login items or an owned Linux XDG autostart entry.                                                   |
+| `src/renderer/`                                | English/Finnish UI, themes, queue/history selection and accessible controls.                                |
 
 ## Startup and shutdown
 
-The main process selects the user-data directory, checks the configuration before
-opening `electron-store`, validates saved settings/queue/window bounds and creates
-the application window. `VIDEONINJA_USER_DATA` can select an absolute profile
-directory for isolated testing. A single-instance lock brings the existing window
-forward when another instance is launched.
+The main process selects the profile, checks the config before opening
+`electron-store`, decrypts where requested, sanitizes settings/queue/window bounds,
+then restores the queue once with scheduling initially stopped. Settings are
+applied before processing starts. Renderer reload requests current state instead
+of restoring the queue again. A single-instance lock focuses the existing app.
 
-The renderer explicitly requests its initial state through the preload bridge.
-Reloading therefore receives current state without restoring the queue again.
-Queue restoration happens once; pending work can resume, while paused work stays
-paused. Tool probes run asynchronously and **Check Again** performs fresh probes.
-Disk space is refreshed when the folder changes and every 30 seconds.
+`VIDEONINJA_USER_DATA` selects an isolated absolute profile directory;
+`VIDEONINJA_TOOLS_DIR` selects an isolated managed-tool directory. Tool probes are
+asynchronous and refreshable. Disk status refreshes on folder changes and every
+30 seconds. Closing hides the window if a tray exists; otherwise it exits.
 
-Closing the window hides it when a tray exists. Without a tray, normal window
-closing can quit the application. Quit stops polling, aborts outstanding metadata
-and playlist previews plus every active download, waits for all child processes
-to settle, and checkpoints the queue before exit. Interrupted active jobs are saved as pending;
-partial media is retained for a later continuation attempt.
+Quit aborts previews and active downloads, awaits their process cleanup and saves
+eligible unfinished work as pending. Manually paused jobs stay paused. Private
+jobs are excluded from saving. Partial media is retained. Start at login requires
+a packaged app: Windows/macOS use native APIs; Linux uses an owned, quoted XDG
+`videoninja.desktop` entry and the persistent AppImage path when applicable.
 
-Startup registration is available only for packaged applications. Windows/macOS
-use Electron's native login-item APIs. Linux uses
-`$XDG_CONFIG_HOME/autostart/videoninja.desktop` (or
-`~/.config/autostart/videoninja.desktop`) with a quoted executable path and an
-ownership marker. The code refuses to replace another application's entry.
-AppImage registration uses its persistent AppImage path rather than a temporary
-mount path; actual autostart behavior also depends on the desktop environment.
+## Queue and resource scheduling
 
-## Queue state and events
+Jobs have UUIDs, validated URLs, absolute destinations, normalized options,
+metadata and timestamps. Actions address stable IDs. The queue holds 500 jobs;
+ordinary submissions contain at most 100 links. Batch insertion validates and
+deduplicates before one durable mutation. History holds at most 100 terminal jobs.
 
-New jobs receive UUIDs. Jobs contain the validated URL, absolute destination,
-normalized options, timestamps, progress, metadata and, after success, a verified
-final file path. All actions address stable job IDs.
+`pending`, `downloading` and `paused` are live states; `completed`, `failed`,
+`cancelled` and archive-derived `skipped` are terminal states. Pending phases
+include waiting for retry, disk, schedule or a duplicate source. Every active job
+has its own controller. Slots and URL/output reservations remain held until the
+process promise settles, including cancellation/pause. Pending jobs can reorder.
+`queue-updated` drives persistence; `download-progress` does not write the store.
 
-```mermaid
-stateDiagram-v2
-    [*] --> pending
-    pending --> downloading
-    pending --> paused: Pause
-    downloading --> paused: Abort and retain partial data
-    paused --> pending: Resume
-    downloading --> completed
-    downloading --> failed
-    pending --> cancelled
-    paused --> cancelled
-    downloading --> cancelled: Abort
-    downloading --> pending: Shutdown checkpoint
-```
+Concurrency is 1–5, default 1. Same normalized URL/resolved output pairs serialize;
+fragments are excluded from that identity, queries retained. Other URLs can fill
+available slots. Without a global rate cap, reducing concurrency lets active jobs
+finish. With a cap, changes restart transfers after all old allocations settle.
+The positive total KiB/s limit is divided by configured slots, rounded down; an
+individual lower cap still applies. Idle slots can leave bandwidth unused. The
+structured cap is appended after raw allowlisted arguments and cannot be raised
+by a pasted `--limit-rate` value.
 
-`settings.maxConcurrent` selects 1–5 active downloaders, defaulting to 1. Increasing
-the limit immediately fills available slots. Lowering it does not abort active
-jobs; new jobs wait until the active count is below the new limit. Startup applies
-the saved limit before scheduling restored jobs.
+Before download, metadata enables a source archive identity and size estimate.
+The reservation is twice the known media size for video, three times for audio,
+plus a configurable free-space floor (default 1024 MiB). Active reservations share
+a filesystem identity when known; unknown volume identities are handled
+conservatively. Insufficient known space waits and rechecks after 30 seconds.
+Unknown sizes or free-space failures are warnings, not fabricated capacity or an
+OS-level disk reservation. Other programs can consume space meanwhile.
 
-An active-job map holds a distinct `AbortController` and promise for each job.
-The adapter receives `downloadVideo(url, outputPath, options, callback, { signal })`.
-Cancellation records one terminal transition and reserves that slot until the
-process settles; a late completion cannot overwrite it. Other active jobs keep
-running. Pause keeps the same job and its partial files, and resume cannot overlap
-the old attempt. A retry of a failed/cancelled history entry creates a new job.
-Pending and paused jobs can be reordered around active jobs.
+Recoverable network/rate-limit/stall failures retry automatically, default two
+retries, maximum five. The initial delay defaults to 15 seconds; exponential
+backoff is capped at 15 minutes. Authentication, format and permanent source
+failures need intervention. A watchdog watches real percentage/byte advancement
+or phase changes, not repeated heartbeat messages. Defaults are 180 seconds for
+downloading and 900 seconds for processing. Abort settlement precedes retry.
 
-The scheduler serializes jobs with the same URL and resolved output directory,
-ignoring the URL fragment but retaining its query. Windows output paths are
-case-folded for that key. A cancelling/pausing child retains the key until it exits;
-unrelated URLs can use other slots. The adapter also reserves canonical
-directory/normalized-URL pairs within this application instance. These locks do
-not coordinate with another application writing to the same folder.
+Optional local-time schedule windows include overnight ranges. At closing time,
+active jobs pause with their partials; only schedule-paused jobs resume next
+window. Manually paused jobs remain paused. Scheduling needs the app running and
+does not wake the OS.
 
-`getQueueState()` exposes `activeIds` and `maxConcurrent`. Aborting children remain
-in `activeIds` until settled. The legacy `currentDownload` is the first active job,
-and `isProcessing` means at least one active attempt remains. To restore without
-starting at the default limit, use `loadState(state, { start: false })`,
-`setConcurrency(limit, { start: false })`, then `processNext()`.
+## Metadata, playlists and output
 
-The durable status is `pending`, `downloading`, `paused`, `completed`, `failed`
-or `cancelled`. Progress also carries a phase such as `preparing`, `downloading`
-or `merging`, plus percent, speed and ETA from the adapter.
+Metadata is a bounded projection: title, source ID/extractor, duration, extension,
+size estimates and up to 200 sanitized format records. Formats expose concrete
+IDs, codecs, dimensions, frame rate and sizes, never media URLs or HTTP headers.
+Exact format selection accepts one concrete ID or a video plus audio ID. It is
+validated against fresh source metadata before download. The adapter uses exact
+`format_id` filters rather than treating an ID as a free-form yt-dlp expression.
+Named profiles deliberately exclude exact IDs and authentication.
 
-The queue is capped at 500 jobs and history at 100 entries. Ordinary batch input
-accepts at most 100 URLs. A playlist selection may supply up to 500 entries within
-the same remaining capacity. `addBatch(urls, outputPath, options)` validates and
-deduplicates the complete batch before one append and notification, then schedules
-available slots. Its return value contains the accepted job IDs. History can be
-searched, cleared after native confirmation, or exported through a save dialog.
-Clearing history does not remove media. Export strips credentials, URL query and
-fragment, local paths, errors and authentication/network options; titles and URL
-paths can still be private.
+Playlist inspection accepts `{ start, pageSize, signal }`, with a one-based start
+and at most 500 entries per page. One extra entry detects `hasMore`; returned
+indexes remain absolute. The main-process preview cache expires after 15 minutes.
+Selection refers to cached entries; renderer URLs cannot replace them. Closing,
+replacing or submitting invalidates the preview. Search/ranges apply to the
+current page; selection must be added or cleared before navigation. Individual
+jobs always use `--no-playlist --playlist-items 1`.
 
-`queue-updated` reports durable changes. `download-progress` reports transient
-progress separately, so ordinary progress updates do not write the complete
-configuration to disk. State transitions checkpoint the latest snapshot,
-including any metadata received since the previous checkpoint.
+Download options include quality/audio format, subtitle languages/automatic
+captions, supported cookies/runtime/network settings and numeric KiB/s limits.
+Extra arguments use a small allowlist. User configs, plugins, arbitrary commands
+and automatic remote-component fetching are disabled; processes use `shell:false`.
+Metadata/progress/error output is bounded and errors redacted.
 
-## Playlist inspection and selection
+Output names include bounded title/extractor/source ID, a quality/audio or exact
+format profile and 16 hex characters of a SHA-256 normalized-URL hash. Different
+URL aliases therefore have distinct files. The final path must resolve to a
+regular, nonempty file within the destination. ffprobe, if present, checks the
+container and media streams using local-file protocols; success is `verified`.
+Without ffprobe the result is explicitly `size-only` with a warning. These checks
+do not decode every frame. File-open/reveal IPC revalidates the completed record,
+resolved path and allowed media extension.
 
-Playlist inspection is explicit and separate from adding individual links. The
-renderer sends the first input URL to `previewPlaylist`; yt-dlp uses flat playlist
-metadata mode with media downloading disabled. It fetches at most 501 entries to
-detect truncation, exposes only the first 500, and reports `hasMore` for the UI
-notice. Entries contain bounded identity, title, URL, duration and availability
-fields. Nested playlists, private/unavailable entries and invalid URLs cannot be
-selected. Raw extractor JSON does not cross the bridge.
+## Archive, privacy and storage
 
-The main process keeps one preview in memory with a generated `previewId` and a
-15-minute expiry. A newer preview, cancellation, successful enqueue or shutdown
-invalidates it. `addPlaylistSelection` accepts that ID and entry indices; main
-resolves the URLs from its cache, revalidates options/folder/capacity and calls
-the atomic batch API. Previewing alone never adds jobs. The dialog starts with
-no selections, disables unavailable entries and preserves selections if enqueue
-fails. Preview data is not restored after an application restart.
+The duplicate archive uses source extractor/ID, destination and the output option
+profile; generic/HTML5 sources retain URL identity to avoid false matches. It
+holds at most 10,000 entries and 2 MiB. A skip requires a matching nonempty output
+file. There is no content-wide scan or full hash comparison. Deleting history
+removes related archive paths; clearing history also clears the archive. Retention
+removes old history by age but never media. Default retention is no age limit,
+within the 100-entry cap.
 
-Each selected URL becomes a normal independently controlled job. Actual downloads
-and single-video previews pass `--no-playlist --playlist-items 1`, so a queued
-playlist URL cannot unexpectedly expand into every item.
+Private mode is captured when adding each job. Private jobs are never saved,
+archived, retained in history or included in native notifications. Existing public
+history/archive remains. Private mode does not remove files or make network access
+anonymous. Profiles (maximum 20) save folder/quality/audio/subtitles/speed only.
 
-## Persistence and recovery
+`config.json` stores validated schema-versioned settings/activity and window bounds.
+Interrupted jobs migrate to pending. Malformed JSON is quarantined beside the
+original as `config.json.corrupt-<timestamp>-<uuid>`; unsupported/invalid entries
+produce recovery warnings. Unreadable or oversized config and failed quarantine
+stop startup rather than overwrite data. Shared limits are 32 MiB serialized
+config and 20 MiB plaintext settings/activity payload, checked on read and write.
 
-`electron-store` writes `config.json` under `app.getPath('userData')`. Source and
-packaged runs may have different user-data paths. Media lives separately in the
-chosen destination folder.
+Optional encryption uses Electron `safeStorage` for the settings/activity payload;
+window bounds remain outside it. Linux `basic_text`/unknown backends are rejected.
+Encryption/decryption failure preserves existing data. Encryption does not cover
+media, cookie files, exported JSON, old plaintext backups or other processes with
+access to the same OS account. Export removes paths, auth/network options, errors
+and URL credentials/query/fragment, but titles and URL paths may still be private.
 
-| Key             | Saved data                                                                                    |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| `schemaVersion` | Configuration schema version, currently 1.                                                    |
-| `settings`      | Versioned language, folder, default quality and validated authentication/runtime preferences. |
-| `queueState`    | Versioned queue and bounded history.                                                          |
-| `windowBounds`  | Sanitized window geometry; off-screen positions are not restored.                             |
+## Tool and application updates
 
-Unversioned legacy data is migrated. Invalid options, duplicate IDs, malformed
-entries and unsupported future queue schemas are rejected with recovery warnings.
-Interrupted downloading/merging states become pending. The additive
-`settings.maxConcurrent` field accepts only integers 1–5; missing/invalid values
-restore as 1. Saved error strings are
-redacted and bounded to 2,000 characters.
+Managed tools are preferred before external installations. yt-dlp and Deno use
+official release assets; Windows/Linux ffmpeg uses yt-dlp's FFmpeg-Builds distribution
+linked by upstream documentation. macOS ffmpeg setup is guided. HTTPS hosts,
+redirects, metadata and executable sizes are bounded. SHA-256 manifests are checked
+before staging, executable probes and atomic replacement; failed replacement
+attempts restore the previous managed version. Archive extraction selects only
+expected executable names and rejects traversal/symlinks. No global privileged
+installation runs silently. Tools remain separate user-privileged programs.
 
-Before store initialization, malformed JSON or a non-object root is moved to a
-sibling `config.json.corrupt-<timestamp>-<uuid>` file. Startup then uses defaults.
-Oversized configuration files are also rejected. If the file cannot be read or
-quarantined safely, startup fails instead of silently overwriting it. These
-backups may contain private data and are not automatically removed.
+EJS diagnosis inspects actual installed yt-dlp verbose component/runtime output
+without requesting a video. When the exact revision is available, its expected
+EJS version is checked against the official upstream source. Unknown/mismatched
+states stay explicit; this is not a live service challenge test.
 
-Configuration is local plaintext, not encrypted secret storage. Authentication
-preferences and original URLs may be needed for retry, so the private store is
-more detailed than a history export. See [Security](../SECURITY.md).
+Application updates use published stable GitHub releases. Startup checking is on
+by default and optional; download/install are explicit. Packaged policy permits
+native updates only for signed installed Windows/macOS or Linux AppImage. Other
+builds use the release page. Signing credentials and a signed release are still
+outstanding; see [Contributing](../CONTRIBUTING.md#signing-and-application-updates).
+An explicit installation checkpoints the queue and temporarily holds new work.
+Installer errors release that hold, leaving the current app usable. Irreversible
+service shutdown stays in the normal awaited quit path after a successful handoff.
+Notifications are off by default, grouped over five seconds and omit media titles.
 
-## Renderer and IPC boundary
+## Verification
 
-The window enables sandboxing, context isolation and web security, with Node
-integration disabled. Its Content Security Policy limits scripts/styles to local
-resources and denies renderer network connections. The `videoninja://app/`
-protocol exposes an explicit resource map, not arbitrary files. Navigation,
-new windows and webviews are denied.
-
-The renderer receives named methods such as `addDownloads`, `previewPlaylist`,
-`addPlaylistSelection`, `pauseDownload`, `retryDownload` and `openFile`; it receives
-no generic IPC send/invoke capability.
-Main-process handlers check the originating window, main frame, application URL
-and command payload. Replies use `{ ok, data }` or a bounded public error object.
-Untrusted titles, URLs and error text are rendered as text.
-
-Directory and cookie-file selection use native dialogs. File actions accept a
-completed download ID, resolve the stored path, check that it remains inside the
-job's destination directory, and require a regular media file with an allowed
-extension. External links are restricted to fixed help URLs. These checks limit
-the bridge's authority; they do not sandbox external download tools or protect a
-profile from another process running as the same user.
-
-## Download adapter and external tools
-
-Executable discovery checks application locations, absolute PATH entries and
-platform-specific installation directories, including Linux paths. It does not
-search an arbitrary working directory. Version probes have timeouts and launch
-without a shell. Detected ffmpeg and JavaScript runtime paths are passed
-explicitly to yt-dlp.
-
-Automatic runtime choice prefers supported Deno, then Node.js, then QuickJS.
-The application's compatibility checks require Deno 2.3+, Node.js 22+, or a
-recognized supported QuickJS version. Electron's embedded JavaScript engine does
-not substitute for an external runtime. Version probes do not establish that
-yt-dlp's EJS scripts are installed or usable.
-
-The adapter disables user yt-dlp configuration, plugin directories and remote
-component downloads. URLs are HTTP(S) only, credentials in URLs are rejected and
-the URL follows the argument terminator. Extra arguments are limited to a small
-network/retry allowlist; arbitrary command, output-template and executable
-options are rejected. Authentication failure does not silently retry without
-cookies.
-
-Machine-readable progress and metadata are decoded across process chunk
-boundaries. Completion uses yt-dlp's `after_move` path, then verifies that the
-file exists inside the destination. Filenames include the title, extractor/video
-ID, quality/audio format and the first 16 hexadecimal SHA-256 characters of the
-normalized input URL. The same URL/options retain a repeatable path; distinct URL
-aliases and quality choices get separate names. This does not rename files saved
-with older filename templates. Quality selectors enforce the requested height ceiling. Audio-only
-selects an audio stream; optional conversion uses ffmpeg. Subprocess output and
-errors are bounded. Cancellation terminates the process tree and waits for exit.
-
-Disk usage comes from `fs.statfs` for the selected folder on all platforms. A
-failed measurement is reported as unavailable. The UI warns below 5 GiB and marks
-below 1 GiB critical; this is an advisory free-space check, not a prediction of
-download size or a storage reservation.
-
-## Packaging and verification
-
-The package contains application source and production dependencies plus the
-Electron runtime. yt-dlp, ffmpeg/ffprobe and JavaScript runtimes are external.
-Windows builds NSIS/portable x64 packages, macOS DMG/ZIP, and Linux AppImage/deb.
-There is no configured signing/notarization or automatic updater.
-
-CI is configured to run checks, source smoke, full native packaging, packaged
-smoke and artifact validation on all three operating systems. A further
-GitHub-hosted-only check exercises the app from a Windows NSIS installation,
-read-only macOS DMG mount or extracted Linux Debian package. The media smoke
-uses real tools with generated local fixtures, including playlist inspection and
-parallel URL aliases, and is a separate explicit check.
-Workflow configuration is not proof of a passing run; see
-[Contributing](../CONTRIBUTING.md) for commands and release validation.
+Unit/DOM tests inject filesystem/process/time/Electron boundaries. Real Electron
+source and package smokes exercise the isolated renderer/IPC/queue; the feature
+smoke covers the new controls and storage round-trip. Real yt-dlp/ffmpeg tests use
+owned media on loopback, including exact formats, playlist paging, merging,
+conversion and ffprobe results. Native CI is configured for Windows/macOS/Linux.
+A configured workflow is not evidence that its latest commit passed. See
+[Contributing](../CONTRIBUTING.md) for commands and release prerequisites.

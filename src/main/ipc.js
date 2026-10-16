@@ -3,15 +3,24 @@ const path = require('node:path');
 const { constants } = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { validateUrl, normalizeOptions } = require('./downloadOptions');
-const { sanitizeSettings, MAX_QUEUE_ITEMS } = require('./persistence');
+const {
+  sanitizeSettings,
+  MAX_QUEUE_ITEMS,
+  FEATURE_DEFAULTS,
+  validateFeatureSettings,
+  sanitizeProfiles,
+} = require('./persistence');
 
 const APP_URL = 'videoninja://app/index.html';
 const HELP_URLS = new Set([
   'https://github.com/yt-dlp/yt-dlp/releases',
+  'https://github.com/yt-dlp/yt-dlp#installation',
   'https://github.com/yt-dlp/yt-dlp/wiki/EJS',
   'https://ffmpeg.org/download.html',
   'https://docs.deno.com/runtime/getting_started/installation/',
   'https://github.com/miikkij/VideoNinja/issues',
+  'https://github.com/miikkij/VideoNinja/releases',
+  'https://brew.sh/',
 ]);
 
 class UserError extends Error {
@@ -125,7 +134,30 @@ function createHandlers(deps) {
   let playlistController = null;
   let playlistCache = null;
   const previewTasks = new Set();
+  let toolController = null,
+    toolTask = null;
   let disposing = false;
+
+  const ready = () => {
+    if (disposing) throw new UserError('The application is shutting down.', 'INVALID_STATE');
+    if (deps.isInstallingUpdate?.())
+      throw new UserError('Wait for the application update to finish.', 'INVALID_STATE');
+    if (toolTask)
+      throw new UserError(
+        'Wait for the tool update to finish before starting downloads.',
+        'TOOLS_BUSY',
+      );
+  };
+  const jobIds = (values) => {
+    if (
+      !Array.isArray(values) ||
+      !values.length ||
+      values.length > MAX_QUEUE_ITEMS ||
+      new Set(values).size !== values.length
+    )
+      throw new UserError('Select one or more downloads.');
+    return values.map(id);
+  };
 
   const asOptions = (input = {}) => {
     let options;
@@ -172,6 +204,7 @@ function createHandlers(deps) {
     return folder;
   };
   const changeJob = (method, value) => {
+    ready();
     if (!queue[method](id(value)))
       throw new UserError('This download can no longer perform that action.', 'INVALID_STATE');
     return true;
@@ -179,7 +212,71 @@ function createHandlers(deps) {
 
   const handlers = {
     getInitialState: () => deps.getInitialState(),
-    recheckTools: () => deps.recheckTools(),
+    recheckTools: () => {
+      ready();
+      return deps.recheckTools();
+    },
+    toolAction: async (input) => {
+      record(input, ['action', 'tool']);
+      if (
+        !['check', 'install', 'update', 'diagnose'].includes(input.action) ||
+        !['yt-dlp', 'ffmpeg', 'runtime'].includes(input.tool)
+      )
+        throw new UserError('Invalid tool action.');
+      if (!deps.toolManager)
+        throw new UserError('Tool management is unavailable.', 'TOOLS_UNAVAILABLE');
+      ready();
+      if (input.action === 'check')
+        return { tools: await deps.recheckTools(), setup: deps.toolManager.getSetupPlan() };
+      const queueState = queue.getQueueState();
+      if (
+        queueState.queue.length ||
+        queueState.isProcessing ||
+        previewTasks.size ||
+        (deps.hasToolCheck?.() ?? false)
+      )
+        throw new UserError(
+          'Finish or remove queued downloads and close previews before changing tools.',
+          'TOOLS_BUSY',
+        );
+      const controller = new AbortController();
+      toolController = controller;
+      const task = Promise.resolve().then(async () => {
+        if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
+        const result = await (input.action === 'diagnose'
+          ? deps.toolManager.diagnose({ signal: controller.signal })
+          : deps.toolManager.install(input.tool, { signal: controller.signal }));
+        if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
+        const currentTools = await deps.recheckTools();
+        return { result, tools: currentTools, setup: deps.toolManager.getSetupPlan() };
+      });
+      toolTask = task;
+      try {
+        return await task;
+      } catch {
+        throw new UserError(
+          'The tool operation failed. Check the connection and setup instructions; the previous installation was kept.',
+          'TOOL_OPERATION_FAILED',
+        );
+      } finally {
+        if (toolTask === task) toolTask = null;
+        if (toolController === controller) toolController = null;
+      }
+    },
+    appUpdate: (input) => {
+      record(input, ['action']);
+      if (!['check', 'status', 'download', 'install'].includes(input.action) || !deps.appUpdater)
+        throw new UserError('Invalid application update action.');
+      if (
+        input.action === 'install' &&
+        (toolTask || previewTasks.size || queue.getQueueState().isProcessing)
+      )
+        throw new UserError(
+          'Pause active downloads and close previews before installing the application update.',
+          'INVALID_STATE',
+        );
+      return deps.appUpdater.action(input.action);
+    },
     chooseDownloadDirectory: async () => {
       const result = await dialog.showOpenDialog(getWindow(), {
         properties: ['openDirectory', 'createDirectory'],
@@ -209,9 +306,29 @@ function createHandlers(deps) {
         'language',
         'quality',
         'maxConcurrent',
+        ...Object.keys(FEATURE_DEFAULTS),
+        'checkUpdatesOnStartup',
       ]);
       const previous = getSettings();
       const merged = { ...previous, ...input };
+      try {
+        validateFeatureSettings(merged);
+      } catch {
+        throw new UserError(
+          'One or more preference values are outside the supported range.',
+          'INVALID_OPTIONS',
+        );
+      }
+      if (
+        merged.checkUpdatesOnStartup !== undefined &&
+        typeof merged.checkUpdatesOnStartup !== 'boolean'
+      )
+        throw new UserError('Choose whether to check for updates.', 'INVALID_OPTIONS');
+      if (merged.encryptedStorage && !deps.privacyStatus?.().encryptionAvailable)
+        throw new UserError(
+          'The operating system key store is unavailable. Encryption was not enabled.',
+          'ENCRYPTION_UNAVAILABLE',
+        );
       if (
         merged.maxConcurrent !== undefined &&
         (!Number.isInteger(merged.maxConcurrent) ||
@@ -223,7 +340,8 @@ function createHandlers(deps) {
       if (
         merged.downloadPath &&
         merged.downloadPath !== previous.downloadPath &&
-        !folders.has(merged.downloadPath)
+        !folders.has(merged.downloadPath) &&
+        !(previous.profiles || []).some((profile) => profile.downloadPath === merged.downloadPath)
       ) {
         throw new UserError('Select the download folder using Choose.', 'FOLDER_REQUIRED');
       }
@@ -261,7 +379,89 @@ function createHandlers(deps) {
       await putSettings(settings);
       return settings;
     },
+    saveProfile: async (input) => {
+      record(input, ['name', 'options', 'downloadPath']);
+      const settings = getSettings();
+      if (
+        typeof input.name !== 'string' ||
+        !input.name.trim() ||
+        input.name.length > 80 ||
+        [...input.name].some((character) => character.charCodeAt(0) < 32)
+      )
+        throw new UserError('Give the profile a name of 1–80 characters.');
+      if (
+        input.downloadPath !== settings.downloadPath &&
+        !folders.has(input.downloadPath) &&
+        !(settings.profiles || []).some((profile) => profile.downloadPath === input.downloadPath)
+      )
+        throw new UserError('Select the profile folder using Choose.', 'FOLDER_REQUIRED');
+      const options = asOptions(input.options);
+      const profiles = [...(settings.profiles || [])];
+      const index = profiles.findIndex(
+        (profile) => profile.name.toLowerCase() === input.name.trim().toLowerCase(),
+      );
+      if (index < 0 && profiles.length >= 20)
+        throw new UserError('Keep up to 20 download profiles.');
+      const profile = {
+        id: index < 0 ? randomUUID() : profiles[index].id,
+        name: input.name.trim(),
+        options,
+        downloadPath: input.downloadPath,
+      };
+      if (index < 0) profiles.push(profile);
+      else profiles[index] = profile;
+      const saved = sanitizeProfiles(profiles);
+      if (!saved.some((item) => item.id === profile.id))
+        throw new UserError('Choose a valid profile folder and options.');
+      const next = sanitizeSettings({ ...settings, profiles: saved });
+      await putSettings(next);
+      return next;
+    },
+    deleteProfile: async (input) => {
+      record(input, ['id']);
+      const settings = getSettings();
+      const next = sanitizeSettings({
+        ...settings,
+        profiles: (settings.profiles || []).filter((profile) => profile.id !== id(input.id)),
+      });
+      await putSettings(next);
+      return next;
+    },
+    queueAction: (input) => {
+      ready();
+      record(input, ['action', 'ids', 'targetIndex']);
+      if (!['pause', 'resume', 'cancel', 'retry', 'move'].includes(input.action))
+        throw new UserError('Choose a supported queue action.');
+      const ids = jobIds(input.ids);
+      if (
+        input.action === 'move' &&
+        (!Number.isInteger(input.targetIndex) ||
+          input.targetIndex < 0 ||
+          input.targetIndex >= MAX_QUEUE_ITEMS)
+      )
+        throw new UserError('Invalid queue position.');
+      return queue.bulkAction(input.action, ids, input.targetIndex);
+    },
+    deleteHistory: async (input) => {
+      ready();
+      record(input, ['ids']);
+      const ids = jobIds(input.ids);
+      const fi = getSettings().language === 'fi';
+      const answer = await dialog.showMessageBox(getWindow(), {
+        type: 'question',
+        buttons: fi ? ['Peruuta', 'Poista valitut'] : ['Cancel', 'Delete selected'],
+        defaultId: 0,
+        cancelId: 0,
+        message: fi
+          ? `Poistetaanko ${ids.length} historiariviä?`
+          : `Delete ${ids.length} history entries?`,
+        detail: fi ? 'Ladatut tiedostot säilyvät.' : 'Downloaded files will be kept.',
+      });
+      ready();
+      return { deleted: answer.response === 1 ? queue.deleteHistory(ids) : 0 };
+    },
     addDownloads: async (input) => {
+      ready();
       record(input, ['urls', 'options']);
       if (!Array.isArray(input.urls) || input.urls.length < 1 || input.urls.length > 100) {
         throw new UserError('Add between 1 and 100 video URLs at a time.', 'INVALID_URL');
@@ -269,6 +469,7 @@ function createHandlers(deps) {
       const urls = input.urls.map(asUrl);
       const options = asOptions(input.options);
       const folder = await requireFolder();
+      ready();
       if (queue.getQueueState().queue.length + batchSize(urls) > MAX_QUEUE_ITEMS)
         throw new UserError('The queue is full.', 'QUEUE_FULL');
       return queue.addBatch(urls, folder, options);
@@ -277,6 +478,7 @@ function createHandlers(deps) {
     pauseDownload: (value) => changeJob('pauseDownload', value),
     resumeDownload: (value) => changeJob('resumeDownload', value),
     moveDownload: (input) => {
+      ready();
       record(input, ['id', 'direction']);
       if (!['up', 'down'].includes(input.direction))
         throw new UserError('Choose a valid queue direction.');
@@ -288,6 +490,7 @@ function createHandlers(deps) {
       return true;
     },
     retryDownload: async (input) => {
+      ready();
       record(input, ['id', 'options']);
       id(input.id);
       let overrides;
@@ -299,10 +502,13 @@ function createHandlers(deps) {
           delete overrides.quality;
         }
       }
-      const result =
-        input.options === undefined
-          ? queue.retryDownload(input.id)
-          : queue.retryWithOptions(input.id, overrides);
+      let result;
+      if (input.options === undefined) result = queue.retryDownload(input.id);
+      else {
+        const folder = await requireFolder();
+        ready();
+        result = queue.retryWithOptions(input.id, overrides, folder);
+      }
       if (!result)
         throw new UserError('Only failed or cancelled downloads can be retried.', 'INVALID_STATE');
       return result;
@@ -342,6 +548,7 @@ function createHandlers(deps) {
       return true;
     },
     clearHistory: async () => {
+      ready();
       const fi = getSettings().language === 'fi';
       const answer = await dialog.showMessageBox(getWindow(), {
         type: 'question',
@@ -352,6 +559,7 @@ function createHandlers(deps) {
         detail: fi ? 'Ladatut tiedostot säilyvät.' : 'Downloaded files will be kept.',
       });
       if (answer.response !== 1) return { cleared: false };
+      ready();
       queue.clearHistory();
       return { cleared: true };
     },
@@ -367,6 +575,7 @@ function createHandlers(deps) {
       return { exported: true };
     },
     previewDownload: async (input) => {
+      ready();
       if (disposing) throw new UserError('The application is shutting down.', 'INVALID_STATE');
       record(input, ['url', 'options']);
       const url = asUrl(input.url);
@@ -386,8 +595,20 @@ function createHandlers(deps) {
       }
     },
     previewPlaylist: async (input) => {
+      ready();
       if (disposing) throw new UserError('The application is shutting down.', 'INVALID_STATE');
-      record(input, ['url', 'options']);
+      record(input, ['url', 'options', 'start', 'pageSize']);
+      const start = input.start ?? 1,
+        pageSize = input.pageSize ?? MAX_QUEUE_ITEMS;
+      if (
+        !Number.isInteger(start) ||
+        start < 1 ||
+        start > 1000000 ||
+        !Number.isInteger(pageSize) ||
+        pageSize < 1 ||
+        pageSize > MAX_QUEUE_ITEMS
+      )
+        throw new UserError('Invalid playlist page.');
       const url = asUrl(input.url);
       const options = asOptions(input.options);
       playlistController?.abort();
@@ -395,7 +616,7 @@ function createHandlers(deps) {
       const controller = new AbortController();
       playlistController = controller;
       const task = Promise.resolve().then(() =>
-        tools.fetchPlaylist(url, options, { signal: controller.signal }),
+        tools.fetchPlaylist(url, options, { signal: controller.signal, start, pageSize }),
       );
       previewTasks.add(task);
       try {
@@ -414,7 +635,7 @@ function createHandlers(deps) {
             }
             return {
               id: typeof entry.id === 'string' ? entry.id.slice(0, 256) : String(position + 1),
-              index: position + 1,
+              index: start + position,
               title: typeof entry.title === 'string' ? entry.title.slice(0, 512) : '',
               url: entryUrl,
               available: Boolean(entry.available && entryUrl),
@@ -430,6 +651,8 @@ function createHandlers(deps) {
           entries,
           hasMore: Boolean(result.hasMore || result.entries.length > MAX_QUEUE_ITEMS),
           maxEntries: MAX_QUEUE_ITEMS,
+          start,
+          pageSize,
         };
         playlistCache = { preview, expires: Date.now() + 15 * 60 * 1000 };
         return preview;
@@ -444,6 +667,7 @@ function createHandlers(deps) {
       return true;
     },
     addPlaylistSelection: async (input) => {
+      ready();
       record(input, ['previewId', 'indices', 'options']);
       const cached = playlistCache;
       if (!cached || cached.preview.previewId !== input.previewId || cached.expires < Date.now()) {
@@ -465,6 +689,7 @@ function createHandlers(deps) {
       }
       const options = asOptions(input.options);
       const folder = await requireFolder();
+      ready();
       if (playlistCache !== cached || disposing) {
         throw new UserError('Preview the playlist again before adding it.', 'PLAYLIST_EXPIRED');
       }
@@ -480,7 +705,21 @@ function createHandlers(deps) {
       return ids;
     },
     openExternal: async (url) => {
-      if (typeof url !== 'string' || !HELP_URLS.has(url))
+      const release =
+        typeof url === 'string' &&
+        /^https:\/\/github\.com\/miikkij\/VideoNinja\/releases\/tag\/v\d+\.\d+\.\d+$/.test(url);
+      const setupLinks = deps.toolManager?.getSetupPlan?.();
+      const officialSetup =
+        typeof url === 'string' &&
+        [
+          'https://ffmpeg.org/download.html',
+          'https://brew.sh/',
+          'https://deno.com/',
+          'https://github.com/denoland/deno/releases',
+          'https://www.gyan.dev/ffmpeg/builds/',
+        ].includes(url) &&
+        Boolean(setupLinks);
+      if (typeof url !== 'string' || (!HELP_URLS.has(url) && !release && !officialSetup))
         throw new UserError('This help link is not allowed.', 'FORBIDDEN');
       await shell.openExternal(url);
       return true;
@@ -492,9 +731,10 @@ function createHandlers(deps) {
       disposing = true;
       previewController?.abort();
       playlistController?.abort();
+      toolController?.abort();
       playlistCache = null;
       // Superseded previews can still be terminating their Windows process tree.
-      await Promise.allSettled([...previewTasks]);
+      await Promise.allSettled([...previewTasks, toolTask]);
     },
   };
 }

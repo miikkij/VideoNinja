@@ -5,6 +5,43 @@ import optionsModule from '../../src/main/downloadOptions.js';
 const { normalizeOptions, validateUrl, validateExtraArgs, QUALITY_PRESETS } = optionsModule;
 
 describe('download option trust boundary', () => {
+  it('normalizes concrete formats, subtitle policy and bounded numeric rate limits', () => {
+    expect(
+      normalizeOptions({
+        formatId: '137+140',
+        rateLimitKbps: 2048,
+        subtitles: true,
+        subtitleAuto: true,
+        subtitleLang: 'en,fi',
+      }),
+    ).toMatchObject({
+      formatId: '137+140',
+      rateLimitKbps: 2048,
+      subtitles: true,
+      subtitleAuto: true,
+    });
+    expect(normalizeOptions({ rateLimitKbps: 0 }).rateLimitKbps).toBe(0);
+    expect(normalizeOptions({ formatId: 'mp4' }).formatId).toBe('mp4');
+  });
+  it.each([
+    '137/22',
+    '137+140/22',
+    '137[height<=1080]',
+    '137,140',
+    '--exec',
+    '137+137',
+    'a+b+c',
+    '',
+  ])('rejects nonconcrete format expressions: %s', (formatId) => {
+    if (!formatId) expect(normalizeOptions({ formatId })).not.toHaveProperty('formatId');
+    else expect(() => normalizeOptions({ formatId })).toThrow();
+  });
+  it.each([-1, 1.5, '100', 1000001, NaN, Infinity])(
+    'rejects an invalid rate: %s',
+    (rateLimitKbps) => {
+      expect(() => normalizeOptions({ rateLimitKbps })).toThrow();
+    },
+  );
   it('accepts literal query metacharacters without shell interpretation', () => {
     expect(validateUrl('https://example.com/watch?a=1&b=$(value)')).toBe(
       'https://example.com/watch?a=1&b=$(value)',

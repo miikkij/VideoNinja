@@ -3,7 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { abortError } = require('./processRunner');
+const { abortError, runProcess } = require('./processRunner');
 
 const execFileAsync = promisify(execFile);
 const SAFE_YTDLP_FLAGS = Object.freeze([
@@ -25,11 +25,18 @@ function createToolService(deps = {}) {
   const env = deps.env || process.env;
   const fileSystem = deps.fs || fs;
   const execute = deps.execFile || execFileAsync;
+  const run = deps.runProcess || runProcess;
   const execPath = deps.execPath || process.execPath;
 
   function candidates(name) {
     const pathValue = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
     const directories = [
+      deps.managedDir || env.VIDEONINJA_TOOLS_DIR,
+      ...(deps.managedDir || env.VIDEONINJA_TOOLS_DIR
+        ? ['yt-dlp', 'runtime', 'ffmpeg'].map((tool) =>
+            paths.join(deps.managedDir || env.VIDEONINJA_TOOLS_DIR, tool),
+          )
+        : []),
       paths.dirname(execPath),
       env.PORTABLE_EXECUTABLE_DIR,
       ...pathValue.split(platform === 'win32' ? ';' : ':'),
@@ -196,7 +203,67 @@ function createToolService(deps = {}) {
       () => true,
       { signal },
     );
-  return { candidates, discover, checkJsRuntimes, checkYtDlpAvailability, checkFfmpegAvailability };
+  const checkFfprobeAvailability = ({ signal } = {}) =>
+    discover(
+      'ffprobe',
+      ['-version'],
+      (text) => text.match(/ffprobe version\s+(\S+)/u)?.[1],
+      () => true,
+      { signal },
+    );
+
+  async function diagnoseEjs({ signal } = {}) {
+    const tool = await checkYtDlpAvailability({ signal });
+    if (!tool.available)
+      return { status: 'tool-missing', version: null, runtime: null, revision: null };
+    const runtime = tool.jsRuntimes[0];
+    const args = [
+      ...SAFE_YTDLP_FLAGS,
+      '--no-js-runtimes',
+      '--verbose',
+      '--simulate',
+      '--skip-download',
+    ];
+    if (runtime) args.push('--js-runtimes', `${runtime.name}:${runtime.path}`);
+    args.push('--');
+    let version = null,
+      revision = null,
+      runtimeDetected = false;
+    const readLine = (line) => {
+      if (line.includes('Optional libraries:'))
+        version = line.match(/\byt_dlp_ejs[- ](\d+\.\d+\.\d+)\b/u)?.[1] || null;
+      if (line.includes('yt-dlp version'))
+        revision = line.match(/\[([a-f0-9]{7,40})\]/u)?.[1] || null;
+      if (line.includes('JS runtimes:') && !/unsupported|none|unknown/u.test(line))
+        runtimeDetected = true;
+    };
+    // No URL is supplied: yt-dlp initializes dependencies and reports diagnostics,
+    // then deliberately exits 2. No source site or media is contacted.
+    const result = await run(tool.path, args, {
+      signal,
+      timeoutMs: 30000,
+      maxOutputBytes: 128 * 1024,
+      onStdoutLine: readLine,
+      onStderrLine: readLine,
+    });
+    if (![0, 2].includes(result.code))
+      return { status: 'unknown', version: null, runtime: null, revision: null };
+    return {
+      status: !version ? 'missing' : !runtimeDetected ? 'runtime-missing' : 'present-unverified',
+      version,
+      runtime: runtimeDetected ? runtime?.name || null : null,
+      revision,
+    };
+  }
+  return {
+    candidates,
+    discover,
+    checkJsRuntimes,
+    checkYtDlpAvailability,
+    checkFfmpegAvailability,
+    checkFfprobeAvailability,
+    diagnoseEjs,
+  };
 }
 
 module.exports = { createToolService, SAFE_YTDLP_FLAGS, settleProbes, ...createToolService() };

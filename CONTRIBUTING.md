@@ -1,9 +1,9 @@
 # Contributing to VideoNinja
 
 Start with the [architecture](docs/ARCHITECTURE.md) and the
-[development plan](docs/DEVELOPMENT_PLAN.md). Version 1.1 introduces the isolated
-renderer, validated download pipeline, recoverable queue and bilingual interface
-described there.
+[development plan](docs/DEVELOPMENT_PLAN.md). The source tree is the unreleased
+1.2.0 development version; public downloads remain at 1.1.0. The implementation
+record distinguishes completed code, local evidence and outstanding release work.
 
 ## Development environment
 
@@ -41,11 +41,13 @@ state without restoring or starting the queue twice.
 | `pnpm run audit`                  | Gate high/critical findings in the full tree and all findings in production dependencies. |
 | `pnpm test:smoke`                 | Exercise the source application in real Electron with an isolated profile.                |
 | `pnpm test:smoke --packaged`      | Exercise the native unpacked app under `dist/`; build first.                              |
+| `pnpm test:features`              | Exercise 1.2 features through real Electron/IPC with isolated fixtures.                   |
+| `pnpm test:features --packaged`   | Exercise the same feature flows in the native unpacked app; build first.                  |
 | `pnpm test:media`                 | Test the actual yt-dlp/ffmpeg pipeline against generated local media.                     |
 | `pnpm build:win`                  | Build Windows NSIS and portable x64 packages, without publishing.                         |
 | `pnpm build:mac`                  | Build macOS DMG and ZIP packages, without publishing.                                     |
 | `pnpm build:linux`                | Build Linux AppImage and Debian packages, without publishing.                             |
-| `pnpm release:verify --artifacts` | Check the current OS's expected, nonempty package files and exact version.                |
+| `pnpm release:verify --artifacts` | Check native package versions, update manifests/hashes and packaged update configuration. |
 | `pnpm format`                     | Rewrite formatting throughout `src/`; keep broad reformatting separate from fixes.        |
 | `pnpm clean`                      | Delete generated `dist/` and `node_modules/.cache`.                                       |
 
@@ -68,9 +70,10 @@ production functions with injected process, filesystem and Electron boundaries
 when a deterministic unit test is appropriate.
 
 The automated coverage includes IPC validation, process output framing and
-cancellation, tool discovery, format arguments, final file validation, concurrent
-queue races, atomic batches, bounded playlist previews and selections, persistence
-recovery, startup registration and renderer behavior. Add a
+cancellation, tool installation/rollback, EJS diagnostics, exact-format validation,
+final-file integrity, concurrent queue races, retries, disk reservations, bandwidth
+limits, schedules, archive identity, private/encrypted storage, updater behavior,
+notifications, paged playlist selection and renderer behavior. Add a
 regression test for changed behavior instead of copying an implementation's
 regular expressions into a test.
 
@@ -79,8 +82,11 @@ launch real Electron, create an isolated temporary profile, exercise first-run
 setup and language persistence, then restore 500 paused jobs and 100 history
 entries. They check the sandbox, rejected IPC requests, text-only rendering,
 history search, retry dialog focus, reorder, reload and layout at 200% zoom.
-Playlist selection and the saved concurrency setting are exercised through real
-IPC and queue code with a controlled external-tool boundary.
+Playlist selection and saved concurrency are exercised through real IPC and queue
+code with a controlled external-tool boundary. `pnpm test:features` additionally
+checks profiles, format/subtitle selection, paging beyond entry 500, bulk actions,
+archive skips, selective history deletion, private jobs, theme and encryption
+round-trip/relaunch. OS secret-store availability is environment-specific.
 Screenshots are written to the ignored `test-results/` directory. These checks do
 not download internet content or test OS installer/uninstaller behavior.
 
@@ -88,6 +94,7 @@ On a headless Linux machine with a correctly configured Electron sandbox, use:
 
 ```sh
 xvfb-run -a pnpm test:smoke
+xvfb-run -a pnpm test:features
 pnpm build:linux
 xvfb-run -a pnpm test:smoke --packaged
 ```
@@ -117,7 +124,9 @@ original audio and MP3 conversion through the real adapter. It checks final path
 and ffprobe streams in a folder containing spaces, Unicode and a literal percent
 sign. A generated playlist checks metadata inspection without media requests;
 parallel URL aliases must produce separate files with the same expected content
-and valid streams. The script removes its temporary fixture tree. This validates media processing;
+and valid streams. Exact progressive and paired DASH format selections, a second
+playlist page and adapter-reported ffprobe integrity are also asserted. The script
+removes its temporary fixture tree. This validates media processing;
 it does not establish current YouTube extractor or EJS compatibility.
 
 For UI, queue or lifecycle changes, also check the relevant behavior manually:
@@ -128,32 +137,43 @@ registration. A source run cannot enable start at login. Use media you are
 authorized to download for an explicit live-service check.
 
 Playlist checks should cover a preview with no automatic selections, unavailable
-entries, the first-500 notice, cancellation, expired previews, selection capacity
+entries, search/range selection, next/previous pages, cancellation, expiry, capacity
 and a failed enqueue retaining the selection. Ordinary input accepts 100 links;
 the selected playlist may contribute up to 500 jobs within the same total queue
 limit. Both paths use one atomic, deduplicated batch. A queued job must remain a
 single media item: `--no-playlist --playlist-items 1`. Test same-URL output
 serialization and separate files for distinct URL aliases under concurrency.
 
-The concurrency setting is an integer from 1 to 5, default 1. Reducing it must
-not abort running jobs, and cancelling one job must not affect another job's
-controller. Exiting processes retain their slot/output reservation until their
-promises settle. Keep progress-only events free of persistence writes.
+The concurrency setting is an integer from 1 to 5, default 1. Without a global
+bandwidth cap, lowering it lets active jobs finish. With a cap, changing its value
+or concurrency aborts/restarts active transfers after settlement to apply the new
+allocation. A cancelled job must not affect another controller. Exiting processes
+retain slot/output reservations until their promises settle. Keep progress-only
+events free of persistence writes. Check scheduling with an injected clock and
+disk reservation races with controlled filesystem measurements.
 
 To isolate a manual source run from your normal profile, set
 `VIDEONINJA_USER_DATA` to a new absolute directory before launching. Never
 silently erase a user's existing profile or partial downloads.
 
+For isolated tool installation testing, `node scripts/tool-install-smoke.mjs`
+installs verified tools under ignored `.tools/tool-install-smoke` and retains
+them for inspection. It has been exercised on Windows; macOS ffmpeg remains a
+guided external installation. Set `VIDEONINJA_TOOLS_DIR` to that absolute
+directory when running media checks against those versions. This downloads
+executables from upstream; it is separate from the loopback-only media transfer.
+
 ## CI, packaging and release
 
 [CI](.github/workflows/ci.yml) is configured for Ubuntu, Windows and macOS. Each
 job installs with the frozen lockfile, runs lint/tests and the audit gate,
-smokes the source app, builds the native installers, smokes the unpacked app and
+installs media tools and runs real media checks, smokes source/features, builds
+the native installers, smokes the unpacked app and its new feature flows and
 verifies its expected artifacts, then runs the native-package smoke. This
 describes the workflow; inspect the result
 for the exact pushed commit before reporting a platform as verified.
 
-[Build & Release](.github/workflows/build.yml) runs the checks, native packaging,
+[Build & Release](.github/workflows/build.yml) runs the checks, real media tests, native packaging,
 packaged/native-package smoke and artifact validation on all three operating systems. A manual
 `workflow_dispatch` uploads artifacts without creating a release. A pushed
 `v*` tag must exactly match `package.json#version`; only a successful tag run
@@ -171,10 +191,50 @@ Before publishing a release:
 5. Review the generated artifacts and signing/notarization status before
    publishing the draft.
 
-Code signing and macOS notarization are not configured. Version 1.1.0 is
-distributed as unsigned Windows x64, macOS ARM64 and Linux x64 packages through
-[GitHub Releases](https://github.com/miikkij/VideoNinja/releases/tag/v1.1.0).
-There is no automatic application updater.
+## Signing and application updates
+
+Version 1.1.0 remains the published, unsigned release for Windows x64, macOS ARM64
+and Linux x64. Version 1.2 development adds updater/signing support, but signing
+credentials have not been configured and no signed binaries have been published.
+Configuration is not evidence of a successful signed/notarized release.
+
+[build-config.cjs](scripts/build-config.cjs),
+[build-release.mjs](scripts/build-release.mjs) and
+[the release workflow](.github/workflows/build.yml) define these prerequisites:
+
+| Platform | GitHub secrets                                                                                             | Repository variable / purpose                                                   |
+| -------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Windows  | `WINDOWS_CSC_LINK`, `WINDOWS_CSC_KEY_PASSWORD`                                                             | `WINDOWS_PUBLISHER_NAME` must match the signing certificate's publisher.        |
+| macOS    | `MACOS_CSC_LINK`, `MACOS_CSC_KEY_PASSWORD`, `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | Developer ID signing identity and App Store Connect notarization API key.       |
+| Linux    | No signing credential wired by these scripts                                                               | AppImage updates use the GitHub release manifests; this is not OS code signing. |
+
+The certificate secrets are mapped to electron-builder's `CSC_LINK` and
+`CSC_KEY_PASSWORD`; use an appropriate exported signing certificate with its
+private key. macOS API key content is base64-encoded in its secret. The wrapper
+decodes it to an owned temporary `.p8` file, supplies `APPLE_API_KEY`, and removes
+the temporary file afterward. macOS identity discovery is enabled in the release
+job only when a certificate is supplied. A signing-enabled build fails if the
+publisher/notarization prerequisites are missing; `forceCodeSigning` is enabled.
+Never commit these values or paste them into logs.
+
+For native signing locally, set the corresponding electron-builder environment
+variables and use `node scripts/build-release.mjs --win`, `--mac` or `--linux`.
+The wrapper handles `APPLE_API_KEY_BASE64`; direct `pnpm build:mac` instead needs
+`APPLE_API_KEY` to identify an existing key file. Every build uses `--publish never`.
+
+The packaged `update-policy.json` enables native application updates only for
+signed installed Windows/macOS apps or Linux AppImages. Windows publisher
+verification remains enabled. Source, unsigned Windows/macOS, Windows portable
+and Debian installations offer the release page. The app checks published stable
+GitHub releases; downloads and installation require separate explicit actions.
+It does not auto-download or install on quit. The legacy 1.1 release has no updater.
+
+Release artifacts include packages, `latest*.yml` manifests and blockmaps.
+`release:verify --artifacts` checks versions, SHA-512/size entries and packaged
+update configuration, including deliberate unsigned builds. The release workflow
+generates `SHA256SUMS.txt` and creates a draft only after all matrix jobs succeed.
+Review actual certificate/notarization results and an installed-app update cycle
+before publishing a signed update channel. No new release is implied by this work.
 
 ## Artwork maintenance
 
@@ -187,7 +247,7 @@ node scripts/capture-screenshots.mjs
 The script launches real Electron with an isolated temporary profile and sample
 tool/playlist/progress data. It captures the unmodified interface into
 `docs/screenshots/`; it does not access the normal profile or download media.
-Review all four images before committing them. On headless Linux, use the same
+Review all five images, including the Finnish dark theme, before committing them. On headless Linux, use the same
 display and sandbox setup as the Electron smoke test.
 
 ```sh

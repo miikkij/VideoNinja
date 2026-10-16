@@ -81,6 +81,7 @@ tools.checkFfmpegAvailability = async () => ({
   available: true, version: '8.0.1', path: ${JSON.stringify(toolPath('ffmpeg'))},
 });
 tools.getDiskSpace = async () => ({ available: true, total: 512 * 1024 ** 3, free: 186 * 1024 ** 3 });
+tools.fetchMetadata = async (url) => ({ id: url.split('/').at(-1), extractor: 'demo', filesize: 64 * 1024 ** 2 });
 tools.fetchPlaylist = async () => ({
   title: 'Make better videos: a practical series',
   entries: [
@@ -187,8 +188,14 @@ try {
   await page.evaluate(() => window.scrollTo(0, 0));
   await fitPanel('#settings-panel');
   await capture('settings-fi.png');
+  await page.locator('#theme').selectOption('dark');
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+  await page.locator('#settings-toggle').click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await fitPanel('.download-panel');
+  await capture('overview-dark-fi.png');
   assert.deepEqual(errors, []);
-  console.log('Captured four actual Electron views with isolated sample data in docs/screenshots.');
+  console.log('Captured five actual Electron views with isolated sample data in docs/screenshots.');
 } finally {
   if (application) await application.close();
   // This temporary tree was created exclusively by this script.

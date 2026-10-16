@@ -5,7 +5,10 @@ const path = require('node:path');
  * @property {'best'|'2160'|'1440'|'1080'|'720'|'480'|'audio'} [quality]
  * @property {'original'|'mp3'|'m4a'|'opus'|'wav'} [audioFormat]
  * @property {boolean} [subtitles]
+ * @property {boolean} [subtitleAuto]
  * @property {string} [subtitleLang]
+ * @property {string} [formatId] One concrete format ID, optionally plus one audio ID.
+ * @property {number} [rateLimitKbps] KiB per second; zero means unlimited.
  * @property {string} [cookiesFromBrowser]
  * @property {string} [cookieFile] Absolute path selected by the user.
  * @property {string} [userAgent]
@@ -44,7 +47,10 @@ const OPTION_KEYS = new Set([
   'format',
   'audioFormat',
   'subtitles',
+  'subtitleAuto',
   'subtitleLang',
+  'formatId',
+  'rateLimitKbps',
   'cookiesFromBrowser',
   'cookieFile',
   'userAgent',
@@ -72,6 +78,16 @@ const NUMBER_ARGS = {
   '--fragment-retries': [0, 20],
   '--socket-timeout': [1, 120],
 };
+const FORMAT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+
+function validateFormatId(value) {
+  const text = stringValue(value, 'format selection', 129);
+  const ids = text.split('+');
+  if (ids.length > 2 || ids.some((id) => !FORMAT_ID.test(id)))
+    throw new Error('Choose a concrete available format, optionally with one audio format.');
+  if (new Set(ids).size !== ids.length) throw new Error('Choose distinct video and audio formats.');
+  return text;
+}
 
 function stringValue(value, name, max = 4096) {
   if (
@@ -188,7 +204,18 @@ function normalizeOptions(input = {}) {
       throw new Error('Unsupported audio format.');
     result.audioFormat = input.audioFormat;
   }
-  for (const key of ['subtitles', 'forceIpv4']) {
+  if (input.formatId !== undefined && input.formatId !== '')
+    result.formatId = validateFormatId(input.formatId);
+  if (input.rateLimitKbps !== undefined) {
+    if (
+      !Number.isInteger(input.rateLimitKbps) ||
+      input.rateLimitKbps < 0 ||
+      input.rateLimitKbps > 1000000
+    )
+      throw new Error('Download rate must be an integer from 0 to 1000000 KiB/s.');
+    result.rateLimitKbps = input.rateLimitKbps;
+  }
+  for (const key of ['subtitles', 'subtitleAuto', 'forceIpv4']) {
     if (input[key] !== undefined) {
       if (typeof input[key] !== 'boolean') throw new Error(`Invalid ${key}.`);
       result[key] = input[key];
@@ -233,4 +260,5 @@ module.exports = {
   normalizeOptions,
   tokenizeExtraArgs,
   validateExtraArgs,
+  validateFormatId,
 };

@@ -17,7 +17,7 @@ const temporary = await mkdtemp(path.join(os.tmpdir(), 'videoninja-media-smoke-'
 const source = path.join(temporary, 'fixtures');
 const output = path.join(temporary, 'Lataukset ä space 100%');
 const controller = new AbortController();
-const deadline = setTimeout(() => controller.abort(), 120000);
+const deadline = setTimeout(() => controller.abort(), 240000);
 let server;
 
 async function runTool(file, args, cwd = source) {
@@ -214,6 +214,12 @@ try {
       'Final output must be an existing regular file.',
     );
     assert.equal(path.dirname(await realpath(result.filepath)), await realpath(folder));
+    assert.equal(
+      result.integrity?.status,
+      'verified',
+      'Completion must include ffprobe verification.',
+    );
+    assert(result.integrity.size > 0 && result.integrity.streams.length > 0);
     return { ...result, events };
   }
   async function streamTypes(filename) {
@@ -257,9 +263,40 @@ try {
     requests.every((request) => request.path === '/playlist.html' || request.method === 'HEAD'),
     'Flat playlist preview must not download the media fixtures.',
   );
+  const secondPage = await ytdlp.fetchPlaylist(
+    `${base}/playlist.html`,
+    {},
+    {
+      signal: controller.signal,
+      start: 2,
+      pageSize: 1,
+    },
+  );
+  assert.equal(secondPage.start, 2);
+  assert.equal(secondPage.pageSize, 1);
+  assert.equal(secondPage.hasMore, false);
+  assert.deepEqual(
+    secondPage.entries.map((entry) => entry.index),
+    [2],
+  );
+  assert.equal(secondPage.entries[0].url, `${base}/fixture.mp4?alias=playlist-two`);
+  assert(
+    requests.every((request) => request.path === '/playlist.html' || request.method === 'HEAD'),
+    'Paging a flat playlist must not download its media.',
+  );
   const metadata = await ytdlp.fetchMetadata(url, {}, { signal: controller.signal });
   assert(metadata.title && metadata.id, 'Metadata preview should return a title and source ID.');
+  // Generic direct-file metadata can omit codec details; verify actual streams below.
+  const progressiveFormat = metadata.formats[0];
+  assert(progressiveFormat?.formatId, 'The progressive fixture must expose a concrete format ID.');
+  const exactProgressive = await download(url, output, { formatId: progressiveFormat.formatId });
+  assert.deepEqual(await streamTypes(exactProgressive.filepath), ['audio', 'video']);
   const first = await download(url, output);
+  assert.notEqual(
+    exactProgressive.filepath,
+    first.filepath,
+    'Exact formats have a distinct output profile.',
+  );
   assert.deepEqual(await streamTypes(first.filepath), ['audio', 'video']);
   const before = await stat(first.filepath),
     originalHash = await hashFile(first.filepath);
@@ -286,6 +323,18 @@ try {
     assert.deepEqual(await streamTypes(alias.filepath), ['audio', 'video']);
   }
 
+  const dashMetadata = await ytdlp.fetchMetadata(
+    `${base}/manifest.mpd`,
+    {},
+    { signal: controller.signal },
+  );
+  const videoFormat = dashMetadata.formats.find((format) => format.hasVideo && !format.hasAudio);
+  const audioFormat = dashMetadata.formats.find((format) => format.hasAudio && !format.hasVideo);
+  assert(videoFormat && audioFormat, 'DASH must expose separate video and audio format IDs.');
+  const exactDash = await download(`${base}/manifest.mpd`, output, {
+    formatId: `${videoFormat.formatId}+${audioFormat.formatId}`,
+  });
+  assert.deepEqual(await streamTypes(exactDash.filepath), ['audio', 'video']);
   const merged = await download(`${base}/manifest.mpd`, output);
   assert.deepEqual(await streamTypes(merged.filepath), ['audio', 'video']);
   assert(
@@ -312,6 +361,10 @@ try {
       {
         passed: [
           'flat-playlist-without-media-downloads',
+          'playlist-second-page',
+          'exact-progressive-format',
+          'exact-dash-video-audio-formats',
+          'ffprobe-integrity',
           'metadata',
           'progressive',
           'already-downloaded',

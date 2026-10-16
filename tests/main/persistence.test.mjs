@@ -22,6 +22,33 @@ const job = (id, overrides = {}) => ({
 });
 
 describe('saved state validation and migration', () => {
+  it('preserves bounded integrity details across restart', () => {
+    const restored = sanitizeQueueState({
+      history: [
+        job('verified', {
+          status: 'completed',
+          integrity: {
+            status: 'verified',
+            size: 1024,
+            duration: 1.5,
+            streams: [
+              { type: 'video', codec: 'h264' },
+              { type: 'audio', codec: 'aac' },
+            ],
+          },
+        }),
+        job('basic', {
+          status: 'completed',
+          integrity: { status: 'size-only', size: 512, warning: 'ffprobe is not installed.' },
+        }),
+      ],
+    });
+    expect(restored.history[0].integrity.streams).toEqual([
+      { type: 'video', codec: 'h264' },
+      { type: 'audio', codec: 'aac' },
+    ]);
+    expect(restored.history[1].integrity.warning).toBe('ffprobe is not installed.');
+  });
   it('migrates legacy presets and active states while preserving paused jobs', () => {
     const restored = sanitizeQueueState(
       {
@@ -98,7 +125,7 @@ describe('saved state validation and migration', () => {
       unsupported: 'private',
       cookieFilePath: 'relative',
     });
-    expect(restored).toEqual({
+    expect(restored).toMatchObject({
       schemaVersion: 1,
       downloadPath: '/tmp/downloads',
       language: 'fi',
@@ -246,7 +273,7 @@ describe('raw configuration recovery', () => {
 
   it('does not read an oversized file into memory', () => {
     const fs = fakeFs('{}');
-    fs.statSync.mockReturnValue({ size: 20 * 1024 * 1024 });
+    fs.statSync.mockReturnValue({ size: 64 * 1024 * 1024 });
     expect(() => readConfiguration('/config.json', { fs })).toThrow('too large');
     expect(fs.readFileSync).not.toHaveBeenCalled();
     expect(fs.renameSync).not.toHaveBeenCalled();

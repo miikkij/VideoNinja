@@ -1,81 +1,135 @@
 # VideoNinjan pikaohje
 
-Lataa käyttöjärjestelmällesi sopiva paketti
-[VideoNinja 1.1.0:n latauslinkeistä](README.md#download-videoninja-110).
-macOS-paketti on Apple Silicon -koneille. Paketit ovat allekirjoittamattomia,
-eikä macOS-sovellusta ole notarisoitu.
+[English](QUICK_START.md) · [Vianetsintä](docs/TROUBLESHOOTING.md)
+
+Ohje kuvaa **1.2.0-kehitysversiota**, joka käynnistetään
+[lähdekoodista](README.md#run-from-source). Julkiset
+[1.1.0:n latauspaketit](README.md#download-videoninja-110) ovat edelleen Windows
+x64:lle, macOS Apple Siliconille ja Linux x64:lle. Paketit ovat
+allekirjoittamattomia, eikä macOS-pakettia ole notarisoitu. Niissä ei ole tässä
+kuvattuja uusia 1.2-toimintoja.
 
 ## Valmistelu
 
-Asenna erikseen [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation),
-[ffmpeg ja ffprobe](https://ffmpeg.org/download.html) sekä
-[Deno](https://docs.deno.com/runtime/getting_started/installation/).
-YouTube tarvitsee myös yt-dlp:n version kanssa yhteensopivat
-[EJS-skriptit](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
-Tarkemmat asennuskomennot ovat [englanninkielisessä pikaohjeessa](QUICK_START.md).
+Valitse yläreunasta **Suomi**. Asetukset avautuvat, jos käyttöönotto on kesken;
+avaa ne myöhemmin Asetukset-painikkeella tai F3:lla.
 
-Käynnistä sovellus ja valitse yläreunan kielivalikosta **Suomi**.
-Ensikäynnistyksessä asetukset avautuvat näkyviin. Valitse latauskansio ja tarkista
-työkalujen tila. Asennettuasi puuttuvan työkalun paina **Tarkista työkalut uudelleen**.
-Jos muutit PATH-ympäristömuuttujaa, käynnistä sovellus uudelleen.
+1. Valitse kirjoitettava latauskansio.
+2. Tarkista yt-dlp:n, ffmpegin/ffproben ja JavaScript-ajoympäristön tila.
+3. Asenna tai päivitä hallitut työkalut niiden painikkeista.
+4. macOS:llä noudata ffmpegin asennusohjetta ja tarkista työkalut uudelleen.
+5. Tarkista YouTube-tuki erillisellä diagnostiikkatoiminnolla.
+
+Windows/Linux tukevat yt-dlp:n, ffmpeg/ffproben ja Denon hallittua asennusta;
+macOS tukee yt-dlp:tä ja Denoa sekä ffmpegin ohjattua asennusta. Työkalut
+asennetaan sovelluksen omaan käyttäjähakemistoon. Järjestelmän muita asennuksia ei
+päivitetä samalla. Anna kaikkien töiden valmistua tai poista ne jonosta, myös
+tauotetut, ja sulje esikatselut ennen työkalujen asennusta tai päivitystä.
+Pelkkä tauotus ei riitä. EJS-tarkistus tutkii asennetut komponentit ja niiden yhteensopivuuden;
+se ei ratkaise YouTuben haastetta oikealla videolla.
+
+Julkaistussa 1.1-versiossa työkalut asennetaan erikseen. Noudata virallisia
+[yt-dlp:n](https://github.com/yt-dlp/yt-dlp#installation),
+[ffmpegin](https://ffmpeg.org/download.html),
+[Denon](https://docs.deno.com/runtime/getting_started/installation/) ja
+[EJS:n](https://github.com/yt-dlp/yt-dlp/wiki/EJS) ohjeita.
+[Englanninkielinen pikaohje](QUICK_START.md#1-choose-a-folder-and-set-up-tools)
+sisältää tarkistuskomennot. Käynnistä sovellus kokonaan uudelleen, jos muutit PATHia.
 
 ## Lataaminen
 
-1. Liitä yksi tai useampi videolinkki, jokainen omalle rivilleen.
-2. Valitse laatu. Äänen latauksessa voit valita alkuperäisen muodon tai muunnoksen.
-3. Esikatsele halutessasi ensimmäisen linkin tiedot.
-4. Lisää linkit jonoon painikkeella tai Enterillä. Shift+Enter lisää rivinvaihdon.
-5. Hallitse töitä tauotus-, jatkamis-, perumis- ja siirtopainikkeilla.
+1. Liitä sallitut HTTP(S)-videolinkit, yksi kullekin riville.
+2. Valitse enimmäislaatu tai pelkkä ääni ja mahdollinen muunnos.
+3. Esikatsele ensimmäinen linkki nähdäksesi lähteen muodot, koodekit, tarkkuudet
+   ja kokoarviot. Valitse automaattinen tai tarkka lähdemuoto.
+4. Valitse tarvittaessa tekstitykset ja kielet, esimerkiksi `en,fi`.
+   Automaattiset tekstitykset otetaan mukaan erillisellä valinnalla.
+5. Aseta halutessasi työn nopeusraja KiB/s tai käytä tallennettua profiilia.
+6. Lisää jonoon painikkeella tai Enterillä. Shift+Enter lisää rivinvaihdon.
 
-Oletuksena ladataan yksi työ kerrallaan. Valitse asetuksista
-**Samanaikaisten latausten enimmäismäärä**, 1–5. Määrän kasvattaminen käynnistää
-odottavia töitä. Pienentäminen antaa käynnissä olevien töiden valmistua ensin.
-Samaan URL-osoitteeseen ja kansioon kohdistuvat työt odottavat toisiaan.
-Rinnakkaiset lataukset jakavat verkkoyhteyden, ja lähdesivusto voi rajoittaa niitä.
+Lomake tyhjenee vasta hyväksynnän jälkeen. Tavallinen erä hyväksyy 100 linkkiä,
+poistaa erän toistuvat linkit ja mahtuu jonon 500 työn kokonaisrajaan.
+Tarkka muotovalinta koskee esikatseltua linkkiä; vaihtaessasi linkin esikatsele
+uudelleen. Pelkkä videoraita voi tarvita erillisen äänen ja ffmpegin.
+Kokoarvio ei välttämättä sisällä lisä-ääntä, tekstityksiä tai käsittelyn tilantarvetta.
 
-Tavallinen erä hyväksyy enintään 100 linkkiä. Saman erän toistuvat linkit lisätään
-vain kerran, ja jonossa voi olla yhteensä enintään 500 työtä.
-Korkeusvalinta on enimmäisraja.
-Ääni ja kuva yhdistetään tarvittaessa ffmpegillä. Tauolta jatkaminen riippuu
-palvelimen ja yt-dlp:n tuesta. Peruminen ei poista osittaisia tiedostoja eikä
-keskeytä muita aktiivisia latauksia.
+Enintään 20 nimettyä profiilia tallentaa kansion, laatu- ja äänivalinnat,
+tekstitykset sekä nopeuden. Tunnistautumistietoja tai lähdekohtaisia tarkkoja
+muototunnuksia ei tallenneta profiiliin. Laatu on enimmäiskorkeus, ei lupaus
+lähteen tarjoamasta tarkkuudesta.
 
 ## Videot soittolistalta
 
-1. Liitä soittolistan URL ensimmäiseksi linkiksi.
-2. Valitse laatu ja mahdollinen äänimuunnos päälomakkeesta.
-3. Paina **Valitse soittolistalta**. Esikatselu hakee metatiedot, ei mediatiedostoja.
-4. Valitse haluamasi videot tai **Valitse kaikki saatavilla olevat**. Aluksi mitään ei ole valittu.
-5. Paina **Lisää valitut jonoon**.
+1. Liitä soittolistan URL ensimmäiseksi ja paina **Valitse soittolistalta**.
+2. Hae nykyiseltä sivulta, valitse rivit tai numeroalue kuten `1-10,15`.
+3. Lisää valitut jonoon tai tyhjennä valinta ennen sivun vaihtamista.
+4. Siirry seuraavalle sivulle päästäksesi yli 500. kohteen.
 
-Yksityisiä, poistettuja tai muuten saavuttamattomia kohteita ei voi valita.
-Esikatselu näyttää enintään ensimmäiset 500 kohdetta ja ilmoittaa, jos niitä on
-lisää. Myöhempiä kohteita varten käytä pienempää soittolistaa tai yksittäisiä
-videolinkkejä. Valittujen töiden pitää mahtua jonon jäljellä olevaan kapasiteettiin.
-Saman valinnan toistuvat linkit lisätään vain kerran.
+Sivulla on enintään 500 kohdetta. Aluksi mitään ei ole valittu. Poistettuja,
+yksityisiä, virheellisiä tai sisäkkäisiä soittolistoja ei voi valita. Haku ja
+numeroalueet koskevat nykyistä sivua; valinnat eivät siirry sivulta toiselle.
+Valinnan pitää mahtua jonon jäljellä olevaan kapasiteettiin.
 
-Esikatselu vanhenee 15 minuutissa. Sulje ja avaa se uudelleen tarvittaessa.
-Sulkeminen peruuttaa keskeneräisen esikatselun. Jos jonoon lisäys epäonnistuu,
-valinnat säilyvät ja virhe jää näkyviin. Tavallinen **Lisää jonoon** käsittelee
-yksittäisiä töitä; koko soittolista ei käynnisty vahingossa.
+Esikatselu hakee metatiedot, ei mediatiedostoja. Se vanhenee 15 minuutissa;
+sulkeminen keskeyttää haun ja tyhjentää valinnan. Epäonnistunut jonoon lisäys
+säilyttää valinnan. Tavallinen jonoon lisäys ei laajenna kokonaista soittolistaa.
 
-## Historia
+## Jonon hallinta
 
-Historia tarjoaa haun, uusintayrityksen, tiedoston avaamisen ja kansion näyttämisen.
-Viennistä jätetään pois paikalliset polut, kirjautumisasetukset ja virheet.
-Historian tyhjennys pyytää vahvistuksen ja säilyttää mediatiedostot.
+Oletuksena ladataan yksi työ kerrallaan. Asetuksissa raja on 1–5. Valitse useita
+rivejä tauotusta, jatkamista, perumista tai odottavien töiden kärkeen siirtämistä
+varten. Myös yksittäisten rivien toiminnot säilyvät. Tauotus ja peruminen jättävät
+osittaiset tiedostot paikoilleen. Muut työt jatkavat itsenäisesti. Samaan URLiin
+ja kansioon kohdistuvat työt odottavat toisiaan.
 
-## Asetukset ja lopettaminen
+- Yhteinen nopeusraja jaetaan varovaisesti määritettyjen latauspaikkojen kesken.
+  `0` tarkoittaa rajoittamatonta. Työn oma pienempi raja säilyy. Yhteisen rajan
+  muuttaminen tai rinnakkaisuuden muuttaminen sen ollessa käytössä käynnistää
+  siirrot uudelleen säilytetyistä osatiedostoista. Ilman yhteistä rajaa
+  rinnakkaisuuden pienentäminen antaa aktiivisten töiden valmistua.
+- Paikallisen ajan latausikkuna voi jatkua yli keskiyön. Ikkunan päättyessä työt
+  tauotetaan; ajastuksen tauottamat jatkuvat seuraavassa ikkunassa. Itse tauotetut
+  pysyvät tauolla. Sovelluksen on oltava käynnissä.
+- Palautuvat verkko-, nopeusrajoitus- ja jumittumisvirheet voivat yrittää
+  automaattisesti uudelleen enintään viisi kertaa. Tunnistautumis- ja muotovirheet
+  vaativat korjauksen. Latauksella ja jälkikäsittelyllä on erilliset aikarajat.
+- Levytilan turvaraja ja arviot aktiivisten töiden tilantarpeesta voivat siirtää
+  aloitusta. Tuntematon tiedostokoko ei muutu varmaksi arvioksi.
+- Valinnaiset työpöytäilmoitukset kokoavat valmistumiset ilman videoiden nimiä.
 
-Avaa asetukset **Asetukset**-painikkeella tai F3:lla. Kieli ja asetukset tallentuvat
-automaattisesti. Tallennusvirhe näkyy käyttöliittymässä ja tallennusta voi yrittää
-uudelleen. Evästeet ovat valinnaisia ja voivat antaa pääsyn tiliisi; säilytä ne
-yksityisinä.
+Duplikaattiarkisto voi ohittaa saman lähdekohteen samalla kohdekansiolla ja
+valinnoilla, jos sen valmis, ei-tyhjä tiedosto on yhä olemassa. Poista ohitus
+käytöstä, kun haluat tarkoituksella uuden siirron. Arkisto ei tutki kaikkia
+levyllä olevia mediatiedostoja.
 
-Ikkunan sulkeminen piilottaa sovelluksen ilmoitusalueelle, jos kuvake on käytettävissä.
-Valitse kuvakkeen valikosta **Lopeta**, kun haluat sulkea sovelluksen. Ilman
-ilmoitusalueen kuvaketta ikkunan sulkeminen lopettaa sovelluksen. Odottavat työt
-palautuvat seuraavalla käynnistyksellä; tauotetut säilyvät tauolla.
+## Historia, yksityisyys ja päivitykset
 
-Katso myös [vianmääritys](docs/TROUBLESHOOTING.md) ja
-[toteutuksen varmennus](docs/DEVELOPMENT_PLAN.md).
+Valmiin työn voi avata tai näyttää kansiossa. ffprobe tarkistaa tiedostosäiliön ja
+mediaraitojen luettavuuden. Ilman sitä tulos kertoo pelkästä kokotarkistuksesta.
+Tarkistus ei dekoodaa jokaista kuvaa. Virhe näyttää luokan ja seuraavan
+korjausehdotuksen; tarvittaessa yritä uudelleen eri asetuksilla.
+
+Historiaa voi hakea, poistaa valitut rivit, rajata säilytyspäivillä, viedä
+rajattuun JSON-tiedostoon tai tyhjentää. Enintään 100 historiariviä säilyy.
+Säilytysaika `0` poistaa ikärajan, ei määrärajaa. Poisto purkaa myös vastaavat
+duplikaattiarkiston viitteet. Mediatiedostoja ei poisteta.
+
+Yksityinen tila koskee uusia töitä. Niiden jonoa, historiaa tai duplikaattitietoja
+ei tallenneta, joten ne katoavat lopetuksessa. Ladatut tiedostot jäävät levylle.
+Valinnainen tallennetun toiminnan salaus käyttää käyttöjärjestelmän
+salaisuustallennusta. Se ei salaa mediaa, evästetiedostoja tai vanhoja
+selväkielisiä varmuuskopioita. Säilytä profiilista yksityinen varmuuskopio ennen
+palautustoimia.
+Ennen paluuta versioon 1.1 poista salaus käytöstä 1.2:ssa ja ota varmuuskopio,
+tai käytä erillistä profiilia. 1.1 ei osaa lukea 1.2:n salattua sisältöä.
+
+Valitse vaalea, tumma tai järjestelmän teema. Sovelluspäivitysten käynnistystarkistus
+ottaa yhteyden GitHubiin; sen voi poistaa käytöstä. Lataaminen ja asentaminen ovat
+erillisiä toimintoja. Lähdekoodiajo sekä tukemattomat tai allekirjoittamattomat
+pakettityypit ohjaavat julkaisusivulle. Allekirjoitettua 1.2-julkaisua ei vielä ole.
+
+Ikkunan sulkeminen piilottaa sovelluksen, jos ilmoitusalue toimii. Valitse sieltä
+**Lopeta** turvallista pysäytystä varten. Ilman ilmoitusaluetta sulkeminen lopettaa.
+Odottavat työt palaavat jonoon käynnistyksessä ajastuksen ja tilarajojen ehdoilla;
+itse tauotetut pysyvät tauolla. Yksityiset työt eivät palaudu. Automaattinen
+käynnistys kirjautuessa vaatii asennetun sovelluksen.

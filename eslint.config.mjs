@@ -7,7 +7,7 @@ export default [
   js.configs.recommended,
   prettier,
   {
-    files: ['src/main/**/*.js', 'src/preload.js', 'scripts/**/*.js'],
+    files: ['src/main/**/*.js', 'src/preload.js', 'scripts/**/*.js', 'scripts/**/*.cjs'],
     languageOptions: { sourceType: 'commonjs', globals: globals.node },
   },
   {

@@ -45,6 +45,16 @@ jobs:
       - name: Audit dependencies
         run: pnpm run audit
 
+      - name: Install ffmpeg on macOS
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install verified media tools
+        run: node scripts/setup-media-tools.mjs
+
+      - name: Exercise actual media downloads and conversion
+        run: pnpm test:media
+
       - name: Configure Linux source sandbox
         if: runner.os == 'Linux'
         run: |
@@ -60,7 +70,7 @@ jobs:
         run: pnpm test:smoke
 
       - name: Build native application and installers
-        run: pnpm exec electron-builder --publish never
+        run: pnpm build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
@@ -77,6 +87,14 @@ jobs:
       - name: Smoke test packaged application on Windows and macOS
         if: runner.os != 'Linux'
         run: pnpm test:smoke --packaged
+
+      - name: Exercise advanced packaged workflows on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm test:features --packaged
+
+      - name: Exercise advanced packaged workflows on Windows and macOS
+        if: runner.os != 'Linux'
+        run: pnpm test:features --packaged
 
       - name: Verify expected package artifacts
         run: pnpm release:verify --artifacts
@@ -101,4 +119,6 @@ jobs:
             dist/*.zip
             dist/*.AppImage
             dist/*.deb
+            dist/*.blockmap
+            dist/latest*.yml
             test-results/*.png

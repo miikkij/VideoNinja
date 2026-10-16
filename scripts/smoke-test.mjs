@@ -157,6 +157,26 @@ try {
       version: 'test fixture',
       path: 'fixture',
     });
+    adapter.fetchMetadata = async (url) => ({
+      id: url.split('/').at(-1),
+      extractor: 'smoke',
+      title: 'Smoke video',
+      filesize: 1024,
+      formats: [
+        {
+          formatId: '18',
+          ext: 'mp4',
+          width: 1920,
+          height: 1080,
+          fps: 30,
+          vcodec: 'avc1',
+          acodec: 'aac',
+          hasAudio: true,
+          hasVideo: true,
+          filesize: 1024,
+        },
+      ],
+    });
     adapter.fetchPlaylist = async () => ({
       title: 'Smoke playlist',
       entries: [

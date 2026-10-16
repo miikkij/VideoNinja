@@ -26,6 +26,52 @@ function serviceWith(files, platform = 'win32') {
 }
 
 describe('resolved executable discovery', () => {
+  it('prefers isolated managed tools and their per-tool directories', () => {
+    const service = createToolService({
+      platform: 'win32',
+      managedDir: 'C:\\Profile\\tools',
+      env: { PATH: 'C:\\Global' },
+      execPath: 'C:\\App\\VideoNinja.exe',
+    });
+    expect(service.candidates('yt-dlp').slice(0, 2)).toEqual([
+      'C:\\Profile\\tools\\yt-dlp.exe',
+      'C:\\Profile\\tools\\yt-dlp\\yt-dlp.exe',
+    ]);
+    expect(service.candidates('deno')).toContain('C:\\Profile\\tools\\runtime\\deno.exe');
+    expect(service.candidates('ffprobe')).toContain('C:\\Profile\\tools\\ffmpeg\\ffprobe.exe');
+  });
+  it('diagnoses the actual EJS package and selected runtime without contacting a media URL', async () => {
+    const runProcess = vi.fn(async (_file, args, handlers) => {
+      handlers.onStderrLine('[debug] yt-dlp version stable@2026.10.14 [abcdef123]');
+      handlers.onStderrLine('[debug] Optional libraries: yt_dlp_ejs-0.8.0, requests-1.0');
+      handlers.onStderrLine('[debug] JS runtimes: deno-2.9.7');
+      expect(args.at(-1)).toBe('--');
+      return { code: 2 };
+    });
+    const base = serviceWith({
+      'C:\\Tools\\yt-dlp.exe': '2026.10.14',
+      'C:\\Tools\\deno.exe': 'deno 2.9.7',
+    });
+    const service = createToolService({
+      platform: 'win32',
+      env: { PATH: 'C:\\Tools' },
+      execPath: 'C:\\App\\VideoNinja.exe',
+      fs: base.fs,
+      execFile: base.execFile,
+      runProcess,
+    });
+    expect(await service.diagnoseEjs()).toEqual({
+      status: 'present-unverified',
+      version: '0.8.0',
+      runtime: 'deno',
+      revision: 'abcdef123',
+    });
+    expect(runProcess).toHaveBeenCalledWith(
+      'C:\\Tools\\yt-dlp.exe',
+      expect.arrayContaining(['--no-remote-components', '--ignore-config', '--simulate']),
+      expect.objectContaining({ maxOutputBytes: 128 * 1024, timeoutMs: 30000 }),
+    );
+  });
   it('waits for every parallel probe before propagating an abort', async () => {
     let finishSecond;
     let settled = false;

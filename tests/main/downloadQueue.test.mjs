@@ -16,6 +16,37 @@ const job = (id, status = 'pending', extra = {}) => ({
 });
 
 describe('concurrent queue scheduling and atomic batches', () => {
+  it('holds all scheduling until the last idempotent admission lock is released', async () => {
+    const { queue, runs } = controlledQueue();
+    const releaseFirst = queue.holdScheduling();
+    const releaseSecond = queue.holdScheduling();
+    queue.addDownload(url('held'), '/tmp');
+    queue.processNext();
+    await flush();
+    expect(runs).toHaveLength(0);
+    releaseFirst();
+    releaseFirst();
+    await flush();
+    expect(runs).toHaveLength(0);
+    releaseSecond();
+    await flush();
+    expect(runs).toHaveLength(1);
+    runs[0].resolve(success);
+    await flush();
+    await queue.shutdown();
+  });
+
+  it('can release a scheduling hold for shutdown without starting pending jobs', async () => {
+    const { queue, runs } = controlledQueue();
+    const release = queue.holdScheduling();
+    queue.addDownload(url('held'), '/tmp');
+    release({ start: false });
+    await queue.shutdown();
+    await flush();
+    expect(runs).toHaveLength(0);
+    expect(() => queue.holdScheduling()).toThrow(/shutting down/);
+  });
+
   it('starts three independent jobs and fills only a settled slot', async () => {
     const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
     const ids = queue.addBatch(['a', 'b', 'c', 'd', 'e'].map(url), '/tmp');
@@ -276,6 +307,658 @@ function controlledQueue(options = {}) {
   return { queue, runs, downloadVideo };
 }
 
+function manualClock(initial = new Date(2026, 9, 16, 12).getTime()) {
+  let current = initial;
+  const timers = new Map();
+  const deps = {
+    now: () => new Date(current).toISOString(),
+    nowMs: () => current,
+    setTimeout(callback, delay) {
+      const handle = { unref() {} };
+      timers.set(handle, { callback, at: current + delay });
+      return handle;
+    },
+    clearTimeout: (handle) => timers.delete(handle),
+  };
+  return {
+    ...deps,
+    timers,
+    async advance(milliseconds) {
+      current += milliseconds;
+      for (;;) {
+        const ready = [...timers].filter(([, timer]) => timer.at <= current);
+        if (!ready.length) break;
+        for (const [handle, timer] of ready) {
+          if (!timers.delete(handle)) continue;
+          timer.callback();
+        }
+        await flush();
+      }
+      await flush();
+    },
+  };
+}
+
+const prepared = (id = 'same', size = 100) => ({
+  id,
+  extractor: 'Fixture',
+  title: 'Owned test media',
+  filesize: size,
+});
+
+describe('automatic retries, watchdogs and scheduling windows', () => {
+  it('backs off transient failures twice, lets other jobs run, and then stops', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({ ...clock, settings: { retryDelaySeconds: 2 } });
+    const failed = vi.fn();
+    queue.on('download-failed', failed);
+    const [a, b] = queue.addBatch(['retry', 'other'].map(url), '/tmp');
+    await flush();
+    runs[0].reject(new Error('ECONNRESET'));
+    await flush();
+    expect(queue.getDownload(a)).toMatchObject({
+      status: 'pending',
+      phase: 'waiting-retry',
+      attempts: 1,
+      retryCount: 1,
+      errorCode: 'network',
+      errorAction: 'check-network',
+      errorRetryable: true,
+    });
+    expect(runs[1].url).toBe(url('other'));
+    runs[1].resolve(success);
+    await flush();
+    expect(queue.getDownload(b).status).toBe('completed');
+    await clock.advance(1999);
+    expect(runs).toHaveLength(2);
+    await clock.advance(1);
+    runs[2].reject(new Error('HTTP Error 503'));
+    await flush();
+    await clock.advance(3999);
+    expect(runs).toHaveLength(3);
+    await clock.advance(1);
+    runs[3].reject(new Error('ETIMEDOUT'));
+    await flush();
+    expect(queue.getDownload(a)).toMatchObject({
+      status: 'failed',
+      attempts: 3,
+      retryCount: 2,
+      retryAt: null,
+    });
+    expect(failed).toHaveBeenCalledTimes(1);
+    await clock.advance(60000);
+    expect(runs).toHaveLength(4);
+  });
+
+  it('never automatically retries permanent authentication failures', async () => {
+    const { queue, runs } = controlledQueue();
+    const id = queue.addDownload(url('auth'), '/tmp');
+    await flush();
+    runs[0].reject(new Error('Sign in to confirm your age'));
+    await flush();
+    expect(queue.getDownload(id)).toMatchObject({
+      status: 'failed',
+      errorCode: 'auth',
+      errorAction: 'update-cookies',
+      retryCount: 0,
+    });
+  });
+
+  it('cancels a scheduled retry and disposes every timer on shutdown', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue(clock);
+    const id = queue.addDownload(url('retry'), '/tmp');
+    await flush();
+    runs[0].reject(new Error('ETIMEDOUT'));
+    await flush();
+    queue.cancelDownload(id);
+    await clock.advance(60000);
+    expect(runs).toHaveLength(1);
+    await queue.shutdown();
+    expect(clock.timers.size).toBe(0);
+  });
+
+  it('restores the retry deadline and already-used retry budget after restart', async () => {
+    const clock = manualClock();
+    const first = controlledQueue(clock);
+    const id = first.queue.addDownload(url('restored-retry'), '/tmp');
+    await flush();
+    first.runs[0].reject(new Error('ECONNRESET'));
+    await flush();
+    const saved = await first.queue.shutdown();
+    const second = controlledQueue({ ...clock, settings: { retryAttempts: 1 } });
+    second.queue.loadState(saved);
+    await flush();
+    expect(second.runs).toHaveLength(0);
+    expect(second.queue.getDownload(id).retryCount).toBe(1);
+    await clock.advance(15000);
+    expect(second.runs).toHaveLength(1);
+    second.runs[0].reject(new Error('ECONNRESET'));
+    await flush();
+    expect(second.queue.getDownload(id)).toMatchObject({ status: 'failed', retryCount: 1 });
+  });
+
+  it('times out only after real progress stalls and holds the slot until abort settles', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({
+      ...clock,
+      settings: { stallTimeoutSeconds: 30, retryAttempts: 0 },
+    });
+    const [a, b] = queue.addBatch(['stalled', 'next'].map(url), '/tmp');
+    await flush();
+    runs[0].progress({ percent: 1, status: 'downloading' });
+    await clock.advance(20000);
+    runs[0].progress({ percent: 2, status: 'downloading' });
+    await clock.advance(20000);
+    runs[0].progress({ percent: 2, status: 'downloading' });
+    await clock.advance(10000);
+    expect(runs[0].signal.aborted).toBe(true);
+    expect(runs).toHaveLength(1);
+    runs[0].progress({ percent: 99 });
+    runs[0].resolve(success);
+    await flush();
+    expect(queue.getDownload(a)).toMatchObject({
+      status: 'failed',
+      errorCode: 'stalled',
+      progress: 2,
+    });
+    expect(runs[1].url).toBe(url('next'));
+    expect(queue.getDownload(b).status).toBe('downloading');
+  });
+
+  it('uses the separate processing timeout after merging starts', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({
+      ...clock,
+      settings: { stallTimeoutSeconds: 30, processingTimeoutSeconds: 60 },
+    });
+    queue.addDownload(url('merging'), '/tmp');
+    await flush();
+    runs[0].progress({ percent: 100, status: 'merging' });
+    await clock.advance(30000);
+    expect(runs[0].signal.aborted).toBe(false);
+    await clock.advance(30000);
+    expect(runs[0].signal.aborted).toBe(true);
+    const stopping = queue.shutdown();
+    runs[0].reject(new Error('aborted'));
+    const saved = await stopping;
+    expect(saved.queue[0].status).toBe('pending');
+    expect(saved.history).toEqual([]);
+  });
+
+  it('accepts advancing bytes when the total size and percentage are unknown', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({ ...clock, settings: { stallTimeoutSeconds: 30 } });
+    queue.addDownload(url('stream'), '/tmp');
+    await flush();
+    runs[0].progress({ percent: 0, status: 'downloading', downloadedBytes: 100 });
+    await clock.advance(20000);
+    runs[0].progress({ percent: 0, status: 'downloading', downloadedBytes: 200 });
+    await clock.advance(20000);
+    expect(runs[0].signal.aborted).toBe(false);
+    runs[0].resolve(success);
+    await flush();
+  });
+
+  it('aborts stalled metadata preparation without releasing its process slot early', async () => {
+    const clock = manualClock();
+    let resolvePreparation;
+    let signal;
+    const prepareDownload = vi.fn((_url, _options, context) => {
+      signal = context.signal;
+      return new Promise((resolve) => {
+        resolvePreparation = resolve;
+      });
+    });
+    const { queue, runs } = controlledQueue({
+      ...clock,
+      prepareDownload,
+      settings: { stallTimeoutSeconds: 30, retryAttempts: 0 },
+    });
+    const id = queue.addDownload(url('metadata'), '/tmp');
+    await flush();
+    await clock.advance(30000);
+    expect(signal.aborted).toBe(true);
+    expect(queue.getQueueState().activeIds).toContain(id);
+    resolvePreparation(prepared());
+    await flush();
+    expect(runs).toHaveLength(0);
+    expect(queue.getDownload(id)).toMatchObject({ status: 'failed', errorCode: 'stalled' });
+  });
+
+  it('waits for an overnight window, pauses at its end and resumes only scheduled pauses', async () => {
+    const clock = manualClock(new Date(2026, 9, 16, 21, 59).getTime());
+    const { queue, runs } = controlledQueue({
+      ...clock,
+      maxConcurrent: 2,
+      settings: { scheduleEnabled: true, scheduleStart: '22:00', scheduleEnd: '06:00' },
+    });
+    const [a, manual] = queue.addBatch(['scheduled', 'manual'].map(url), '/tmp');
+    queue.pauseDownload(manual);
+    await flush();
+    expect(runs).toHaveLength(0);
+    expect(queue.getDownload(a).phase).toBe('waiting-schedule');
+    await clock.advance(60000);
+    expect(runs).toHaveLength(1);
+    // Jumping the wall clock models sleep/wake across the end of the window.
+    await clock.advance(8 * 3600000);
+    expect(runs[0].signal.aborted).toBe(true);
+    expect(queue.getDownload(a)).toMatchObject({ status: 'paused', pausedBySchedule: true });
+    runs[0].reject(new Error('aborted'));
+    await flush();
+    await clock.advance(16 * 3600000);
+    expect(runs).toHaveLength(2);
+    expect(queue.getDownload(a).pausedBySchedule).toBe(false);
+    expect(queue.getDownload(manual)).toMatchObject({ status: 'paused', pausedBySchedule: false });
+  });
+
+  it('lets a user take ownership of an automatic schedule pause', async () => {
+    const clock = manualClock(new Date(2026, 9, 16, 5, 59).getTime());
+    const { queue, runs } = controlledQueue({
+      ...clock,
+      settings: { scheduleEnabled: true, scheduleStart: '22:00', scheduleEnd: '06:00' },
+    });
+    const id = queue.addDownload(url('scheduled'), '/tmp');
+    await flush();
+    await clock.advance(60000);
+    expect(queue.pauseDownload(id)).toBe(true);
+    runs[0].reject(new Error('aborted'));
+    await flush();
+    await clock.advance(16 * 3600000);
+    expect(runs).toHaveLength(1);
+    expect(queue.getDownload(id)).toMatchObject({ status: 'paused', pausedBySchedule: false });
+  });
+});
+
+describe('disk reservations, source archive and shared bandwidth', () => {
+  it('reserves concurrent temporary space on one volume and starts a blocked job later', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({
+      ...clock,
+      maxConcurrent: 2,
+      settings: { diskReserveMb: 0 },
+      prepareDownload: async (value) => prepared(value),
+      realpath: async (value) => value,
+      getDiskSpace: async () => ({ available: true, free: 300, volumeId: 'volume-a' }),
+    });
+    const [a, b] = queue.addBatch(['disk-a', 'disk-b'].map(url), '/tmp');
+    await flush();
+    expect(runs).toHaveLength(1);
+    expect(queue.getDownload(b)).toMatchObject({
+      phase: 'waiting-disk',
+      disk: { reservedBytes: 200, estimatedBytes: 200 },
+      errorAction: 'free-space',
+    });
+    runs[0].resolve(success);
+    await flush();
+    expect(queue.getDownload(a).status).toBe('completed');
+    await clock.advance(30000);
+    expect(runs).toHaveLength(2);
+    expect(runs[1].url).toBe(url('disk-b'));
+  });
+
+  it('keeps the reserve floor and uses a larger temporary-space estimate for audio', async () => {
+    const { queue, runs } = controlledQueue({
+      settings: { diskReserveMb: 1 },
+      prepareDownload: async () => prepared('audio', 100),
+      realpath: async (value) => value,
+      getDiskSpace: async () => ({ available: true, free: 1024 * 1024 + 250 }),
+    });
+    const id = queue.addDownload(url('audio'), '/tmp', { quality: 'audio' });
+    await flush();
+    expect(runs).toHaveLength(0);
+    expect(queue.getDownload(id)).toMatchObject({
+      phase: 'waiting-disk',
+      disk: { estimatedBytes: 300 },
+    });
+  });
+
+  it('allows independent volumes and explicitly reports unknown disk information', async () => {
+    const { queue, runs } = controlledQueue({
+      maxConcurrent: 3,
+      settings: { diskReserveMb: 0 },
+      prepareDownload: async (value) => prepared(value),
+      realpath: async (value) => value,
+      getDiskSpace: async (folder) =>
+        folder === '/unknown'
+          ? { available: false, free: null }
+          : { available: true, free: 250, volumeId: folder },
+    });
+    queue.addDownload(url('a'), '/volume-a');
+    queue.addDownload(url('b'), '/volume-b');
+    const unknown = queue.addDownload(url('c'), '/unknown');
+    await flush();
+    expect(runs).toHaveLength(3);
+    expect(queue.getDownload(unknown).disk).toMatchObject({ available: false, free: null });
+  });
+
+  it('conservatively shares reservations when a disk provider cannot identify volumes', async () => {
+    const { queue, runs } = controlledQueue({
+      maxConcurrent: 2,
+      settings: { diskReserveMb: 0 },
+      prepareDownload: async (value) => prepared(value),
+      realpath: async (value) => value,
+      getDiskSpace: async () => ({ free: 250, available: true }),
+    });
+    queue.addDownload(url('a'), '/folder-a');
+    const b = queue.addDownload(url('b'), '/folder-b');
+    await flush();
+    expect(runs).toHaveLength(1);
+    expect(queue.getDownload(b).phase).toBe('waiting-disk');
+  });
+
+  it('serializes source aliases and skips the later alias only after verified success', async () => {
+    const { queue, runs } = controlledQueue({
+      maxConcurrent: 2,
+      prepareDownload: async () => prepared(),
+      realpath: async () => '/canonical',
+      fileExists: async () => true,
+    });
+    const [a, b] = queue.addBatch([url('watch?v=one'), url('short/one')], '/tmp');
+    await flush();
+    expect(runs).toHaveLength(1);
+    expect(queue.getDownload(b).phase).toBe('waiting-duplicate');
+    runs[0].resolve(success);
+    await flush();
+    expect(runs).toHaveLength(1);
+    expect(queue.getDownload(a).status).toBe('completed');
+    expect(queue.getDownload(b)).toMatchObject({ status: 'skipped', filepath: success.filepath });
+    expect(queue.getStateForSave().archive).toHaveLength(1);
+  });
+
+  it('does not archive failed attempts or block an alias permanently after cancellation', async () => {
+    const { queue, runs } = controlledQueue({
+      maxConcurrent: 2,
+      prepareDownload: async () => prepared(),
+      realpath: async () => '/canonical',
+    });
+    const [a, b] = queue.addBatch([url('watch'), url('alias')], '/tmp');
+    await flush();
+    queue.cancelDownload(a);
+    expect(runs).toHaveLength(1);
+    runs[0].resolve(success);
+    await flush();
+    expect(queue.archive).toEqual([]);
+    expect(runs).toHaveLength(2);
+    expect(queue.getDownload(b).status).toBe('downloading');
+  });
+
+  it('restores source aliases from the persisted archive across sessions', async () => {
+    const deps = {
+      prepareDownload: async () => prepared(),
+      realpath: async () => '/canonical',
+      fileExists: async () => true,
+    };
+    const first = controlledQueue(deps);
+    first.queue.addDownload(url('original'), '/tmp');
+    await flush();
+    first.runs[0].resolve(success);
+    await flush();
+    const saved = await first.queue.shutdown();
+    const second = controlledQueue(deps);
+    expect(second.queue.loadState(saved)).toEqual([]);
+    const id = second.queue.addDownload(url('alias'), '/tmp');
+    await flush();
+    expect(second.runs).toHaveLength(0);
+    expect(second.queue.getDownload(id).status).toBe('skipped');
+  });
+
+  it('does not treat generic filename IDs from different source URLs as the same media', async () => {
+    const { queue, runs } = controlledQueue({
+      prepareDownload: async () => ({ ...prepared('video'), extractor: 'generic' }),
+      realpath: async () => '/canonical',
+      fileExists: async () => true,
+    });
+    queue.addDownload('https://one.example/video.mp4', '/tmp');
+    await flush();
+    runs[0].resolve(success);
+    await flush();
+    queue.addDownload('https://two.example/video.mp4', '/tmp');
+    await flush();
+    expect(runs).toHaveLength(2);
+  });
+
+  it('downloads missing archived files again and distinguishes output quality and folder', async () => {
+    const exists = vi.fn(async () => false);
+    const { queue, runs } = controlledQueue({
+      prepareDownload: async () => prepared(),
+      realpath: async (value) => value,
+      fileExists: exists,
+    });
+    queue.addDownload(url('original'), '/tmp');
+    await flush();
+    runs[0].resolve(success);
+    await flush();
+    queue.addDownload(url('alias'), '/tmp');
+    await flush();
+    expect(exists).toHaveBeenCalledWith(success.filepath);
+    expect(runs).toHaveLength(2);
+    runs[1].resolve(success);
+    await flush();
+    exists.mockResolvedValue(true);
+    queue.addDownload(url('quality'), '/tmp', { quality: '720' });
+    await flush();
+    expect(runs).toHaveLength(3);
+    runs[2].resolve(success);
+    await flush();
+    queue.addDownload(url('folder'), '/another');
+    await flush();
+    expect(runs).toHaveLength(4);
+  });
+
+  it('enforces a conservative shared rate and restarts old-rate jobs only after all settle', async () => {
+    const { queue, runs } = controlledQueue({
+      maxConcurrent: 2,
+      settings: { globalRateKbps: 101 },
+    });
+    const [a, b] = queue.addBatch(['a', 'b', 'c'].map(url), '/tmp');
+    await flush();
+    expect(runs.map((run) => run.options.rateLimitKbps)).toEqual([50, 50]);
+    queue.configure({ globalRateKbps: 30 });
+    expect(runs.every((run) => run.signal.aborted)).toBe(true);
+    queue.pauseDownload(a); // Taking manual ownership must not bypass the old-rate barrier.
+    runs[1].reject(new Error('aborted'));
+    await flush();
+    expect(runs).toHaveLength(2);
+    runs[0].resolve(success);
+    await flush();
+    expect(runs).toHaveLength(4);
+    expect(runs.slice(2).map((run) => run.options.rateLimitKbps)).toEqual([15, 15]);
+    expect(queue.getDownload(a).status).toBe('paused');
+    expect(queue.getDownload(b).status).toBe('downloading');
+    expect(queue.history).toEqual([]);
+  });
+
+  it('respects tighter job rates and reduces concurrency for a sub-slot integer rate budget', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 5, settings: { globalRateKbps: 1 } });
+    queue.addBatch(['a', 'b'].map(url), '/tmp');
+    await flush();
+    expect(runs).toHaveLength(1);
+    expect(runs[0].options.rateLimitKbps).toBe(1);
+    const other = controlledQueue({ maxConcurrent: 2, settings: { globalRateKbps: 100 } });
+    other.queue.addDownload(url('slow'), '/tmp', { rateLimitKbps: 10 });
+    await flush();
+    expect(other.runs[0].options.rateLimitKbps).toBe(10);
+  });
+
+  it('waits for old allocations when changing concurrency before applying final settings', async () => {
+    const { queue, runs } = controlledQueue({
+      maxConcurrent: 1,
+      settings: { globalRateKbps: 120 },
+    });
+    queue.addBatch(['a', 'b', 'c'].map(url), '/tmp');
+    await flush();
+    expect(runs[0].options.rateLimitKbps).toBe(120);
+    queue.setConcurrency(3, { start: false });
+    queue.configure({ globalRateKbps: 90 });
+    expect(runs[0].signal.aborted).toBe(true);
+    await flush();
+    expect(runs).toHaveLength(1);
+    runs[0].reject(new Error('aborted'));
+    await flush();
+    expect(runs).toHaveLength(4);
+    expect(runs.slice(1).map((run) => run.options.rateLimitKbps)).toEqual([30, 30, 30]);
+  });
+});
+
+describe('bulk controls and private bounded history', () => {
+  it('validates complete bulk selections before cancelling and emits one durable snapshot', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 2 });
+    const ids = queue.addBatch(['a', 'b', 'c'].map(url), '/tmp');
+    await flush();
+    expect(() => queue.bulkAction('cancel', [ids[0], 'missing'])).toThrow(/no longer available/);
+    expect(runs.every((run) => !run.signal.aborted)).toBe(true);
+    const updated = vi.fn();
+    queue.on('queue-updated', updated);
+    expect(queue.bulkAction('cancel', ids)).toEqual(ids);
+    expect(updated).toHaveBeenCalledTimes(1);
+    expect(queue.history).toHaveLength(3);
+    expect(queue.getQueueState().activeIds).toHaveLength(2);
+    runs.forEach((run) => run.resolve(success));
+    await flush();
+    expect(queue.getQueueState().activeIds).toEqual([]);
+  });
+
+  it('moves a waiting selection in its queue order and pauses/resumes as a batch', async () => {
+    const { queue, runs } = controlledQueue();
+    const ids = queue.addBatch(['a', 'b', 'c', 'd'].map(url), '/tmp');
+    await flush();
+    expect(queue.bulkAction('move', [ids[3], ids[1], ids[0]], 0)).toEqual([ids[1], ids[3]]);
+    expect(queue.queue.map((job) => job.id)).toEqual([ids[1], ids[3], ids[0], ids[2]]);
+    expect(queue.bulkAction('pause', [ids[1], ids[3]])).toEqual([ids[1], ids[3]]);
+    expect(queue.bulkAction('resume', [ids[1], ids[3]])).toEqual([ids[1], ids[3]]);
+    runs[0].resolve(success);
+    await flush();
+    expect(runs[1].url).toBe(url('b'));
+  });
+
+  it('checks bulk retry capacity before creating any new jobs', () => {
+    const { queue } = controlledQueue({ maxQueue: 2 });
+    queue.loadState(
+      {
+        queue: [job('pending', 'paused')],
+        history: [job('failed', 'failed'), job('cancelled', 'cancelled')],
+      },
+      { start: false },
+    );
+    expect(() => queue.bulkAction('retry', ['failed', 'cancelled'])).toThrow(/full/);
+    expect(queue.queue.map((job) => job.id)).toEqual(['pending']);
+    expect(queue.bulkAction('retry', ['failed'])).toEqual(['failed']);
+    expect(queue.queue).toHaveLength(2);
+  });
+
+  it('omits private jobs from every save even after the setting is switched off', async () => {
+    const { queue, runs } = controlledQueue({
+      prepareDownload: async () => prepared(),
+      realpath: async () => '/canonical',
+    });
+    queue.loadState({ history: [job('public', 'completed')] }, { start: false });
+    queue.configure({ privateMode: true });
+    const privateId = queue.addDownload(url('secret'), '/tmp', { userAgent: 'private-agent' });
+    expect(queue.getStateForSave().queue).toEqual([]);
+    queue.configure({ privateMode: false });
+    expect(JSON.stringify(queue.getStateForSave())).not.toContain('secret');
+    await flush();
+    runs[0].resolve(success);
+    await flush();
+    expect(queue.getDownload(privateId)).toBeNull();
+    expect(queue.history.map((job) => job.id)).toEqual(['public']);
+    expect(queue.archive).toEqual([]);
+  });
+
+  it('preserves the previous public archive through private mode and a restart', async () => {
+    const deps = {
+      prepareDownload: async () => prepared(),
+      realpath: async () => '/canonical',
+      fileExists: async () => true,
+    };
+    const first = controlledQueue(deps);
+    first.queue.addDownload(url('public-original'), '/tmp');
+    await flush();
+    first.runs[0].resolve(success);
+    await flush();
+    const publicArchive = first.queue.getStateForSave().archive;
+    expect(publicArchive).toHaveLength(1);
+    first.queue.configure({ privateMode: true, skipDuplicates: false });
+    first.queue.addDownload(url('private-download'), '/tmp', { quality: '720' });
+    await flush();
+    first.runs[1].resolve({ ...success, filepath: '/tmp/private.mp4' });
+    await flush();
+    const saved = await first.queue.shutdown();
+    expect(saved.archive).toEqual(publicArchive);
+    expect(JSON.stringify(saved)).not.toContain('private-download');
+    const second = controlledQueue({ ...deps, settings: { privateMode: true } });
+    second.queue.loadState(saved, { start: false });
+    expect(second.queue.getStateForSave().archive).toEqual(publicArchive);
+    second.queue.configure({ privateMode: false });
+    const alias = second.queue.addDownload(url('public-alias'), '/tmp');
+    await flush();
+    expect(second.runs).toHaveLength(0);
+    expect(second.queue.getDownload(alias).status).toBe('skipped');
+  });
+
+  it('deletes selected history and its archive without touching files or pending jobs', async () => {
+    const fileExists = vi.fn();
+    const { queue } = controlledQueue({ fileExists });
+    queue.loadState(
+      {
+        queue: [job('queued', 'paused')],
+        history: [job('a', 'completed', { filepath: '/tmp/a.mp4' }), job('b', 'failed')],
+      },
+      { start: false },
+    );
+    queue.archive = [{ key: 'a', filepath: '/tmp/a.mp4', completedAt: new Date().toISOString() }];
+    expect(queue.deleteHistory(['a'])).toBe(1);
+    expect(queue.history.map((job) => job.id)).toEqual(['b']);
+    expect(queue.archive).toEqual([]);
+    expect(queue.queue.map((job) => job.id)).toEqual(['queued']);
+    expect(fileExists).not.toHaveBeenCalled();
+  });
+
+  it('keeps existing history by default and applies opt-in retention to history and archive', () => {
+    const clock = manualClock();
+    const { queue } = controlledQueue(clock);
+    queue.loadState(
+      {
+        history: [
+          job('old', 'completed', { completedAt: '2020-01-01T00:00:00.000Z' }),
+          job('recent', 'completed', { completedAt: clock.now() }),
+        ],
+      },
+      { start: false },
+    );
+    expect(queue.history).toHaveLength(2);
+    queue.archive = [{ key: 'old', completedAt: '2020-01-01T00:00:00.000Z' }];
+    queue.configure({ historyRetentionDays: 30 });
+    expect(queue.history.map((job) => job.id)).toEqual(['recent']);
+    expect(queue.archive).toEqual([]);
+  });
+
+  it('expires opted-in history while the application is idle without deleting media', async () => {
+    const clock = manualClock();
+    const { queue } = controlledQueue({ ...clock, settings: { historyRetentionDays: 1 } });
+    queue.loadState({ history: [job('recent', 'completed', { completedAt: clock.now() })] });
+    expect(queue.history).toHaveLength(1);
+    await clock.advance(86400001);
+    expect(queue.history).toEqual([]);
+    expect(clock.timers.size).toBe(0);
+  });
+
+  it('bounds archive bytes in addition to entry count and validates settings atomically', () => {
+    const { queue } = controlledQueue();
+    queue.archive = Array.from({ length: 10000 }, (_, index) => ({
+      key: String(index),
+      filepath: '/' + 'x'.repeat(4000),
+    }));
+    const saved = queue.getStateForSave();
+    expect(saved.archive.length).toBeLessThan(1000);
+    expect(Buffer.byteLength(JSON.stringify(saved.archive))).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(() => queue.configure({ retryAttempts: 4, scheduleStart: '25:00' })).toThrow();
+    expect(queue.settings.retryAttempts).toBe(2);
+    expect(() => queue.configure({ globalRateKbps: -1 })).toThrow();
+  });
+});
+
 describe('DownloadQueue lifecycle', () => {
   it('creates unique UUIDs even when the clock does not advance', () => {
     const { queue } = controlledQueue({ now: () => '2026-10-16T00:00:00.000Z' });
@@ -524,6 +1207,18 @@ describe('DownloadQueue lifecycle', () => {
     expect(queue.getDownload(b).options.cookiesFromBrowser).toBeUndefined();
     expect(queue.getDownload(b).options.forceIpv4).toBe(true);
     expect(queue.history).toHaveLength(1);
+  });
+
+  it('clears a failed exact format when retrying with a quality preset', () => {
+    const { queue } = controlledQueue();
+    queue.loadState(
+      { history: [job('exact', 'failed', { options: { quality: 'best', formatId: '137+140' } })] },
+      { start: false },
+    );
+    const changed = queue.retryWithOptions('exact', { quality: '720' });
+    expect(queue.getDownload(changed).options).toEqual({ quality: '720' });
+    const networkOnly = queue.retryWithOptions('exact', { forceIpv4: true });
+    expect(queue.getDownload(networkOnly).options.formatId).toBe('137+140');
   });
 
   it('restores validated legacy data, preserves pause, and skips corrupt jobs', async () => {

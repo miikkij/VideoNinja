@@ -64,11 +64,24 @@ async function boot(overrides = {}) {
     'cancelPlaylistPreview',
     'addPlaylistSelection',
     'openExternal',
+    'toolAction',
+    'appUpdate',
+    'saveProfile',
+    'deleteProfile',
+    'queueAction',
+    'deleteHistory',
   ])
     api[method] = vi.fn(async () => ok(null));
   api.getInitialState = vi.fn(async () => ok(state));
   api.saveSettings = vi.fn(async (input) => ok(input));
-  for (const name of ['onState', 'onProgress', 'onDiskSpace', 'onTools', 'onWarnings']) {
+  for (const name of [
+    'onState',
+    'onProgress',
+    'onDiskSpace',
+    'onTools',
+    'onWarnings',
+    'onAppUpdate',
+  ]) {
     api[name] = vi.fn((callback) => {
       events[name] = callback;
       return vi.fn();
@@ -195,7 +208,7 @@ describe('production renderer', () => {
     expect(item.querySelector('.error-detail').textContent).toBe(hostile);
     expect(item.querySelector('img')).toBeNull();
     expect(window.attacked).toBeUndefined();
-    item.querySelector('.error-area button').click();
+    item.querySelector('.error-area button:last-of-type').click();
     await vi.waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(hostile));
   });
 
@@ -305,7 +318,7 @@ describe('production renderer', () => {
     await vi.waitFor(() =>
       expect(api.retryDownload).toHaveBeenCalledWith({
         id: 'failed',
-        options: { quality: '720', forceIpv4: true },
+        options: { quality: '720', forceIpv4: true, subtitles: false },
       }),
     );
     await vi.waitFor(() => expect($('retry-dialog').open).toBe(false));
@@ -451,7 +464,10 @@ describe('production renderer', () => {
       $(id).value = '';
     $('retry-form').requestSubmit();
     await vi.waitFor(() =>
-      expect(api.retryDownload).toHaveBeenCalledWith({ id: 'failed', options: { quality: '720' } }),
+      expect(api.retryDownload).toHaveBeenCalledWith({
+        id: 'failed',
+        options: { quality: '720', subtitles: false },
+      }),
     );
   });
 
@@ -532,6 +548,8 @@ describe('production renderer', () => {
     expect(api.previewPlaylist).toHaveBeenCalledWith({
       url: 'https://example.com/playlist',
       options: { quality: 'best' },
+      start: 1,
+      pageSize: 500,
     });
     expect(api.addDownloads).not.toHaveBeenCalled();
     expect(api.addPlaylistSelection).not.toHaveBeenCalled();
@@ -611,7 +629,7 @@ describe('production renderer', () => {
     $('playlist-preview-button').click();
     await vi.waitFor(() => expect($('playlist-list').children.length).toBe(500));
     expect($('playlist-limit').hidden).toBe(false);
-    expect($('playlist-limit').textContent).toContain('500');
+    expect($('playlist-page').textContent).toContain('500');
     $('playlist-select-all').click();
     api.addPlaylistSelection.mockResolvedValue({ ok: false, error: { code: 'QUEUE_FULL' } });
     $('playlist-add-selected').click();
@@ -621,5 +639,642 @@ describe('production renderer', () => {
     expect($('playlist-dialog').open).toBe(true);
     expect($('playlist-list').querySelectorAll('input:checked').length).toBe(500);
     expect($('playlist-add-selected').disabled).toBe(false);
+  });
+
+  it('loads advanced preferences, applies the theme, and saves validated settings without overwriting profiles', async () => {
+    const { api } = await boot({
+      settings: {
+        downloadPath: '/downloads',
+        language: 'fi',
+        theme: 'dark',
+        globalRateKbps: 512,
+        scheduleEnabled: true,
+        scheduleStart: '22:00',
+        scheduleEnd: '07:00',
+        profiles: [
+          { id: 'p', name: 'Audio', options: { quality: 'audio' }, downloadPath: '/downloads' },
+        ],
+      },
+      privacy: { encryptionAvailable: true },
+    });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect($('global-rate').value).toBe('512');
+    expect($('schedule-fields').hidden).toBe(false);
+    expect($('queue-policy-status').textContent).toContain('22:00–07:00');
+    expect($('encrypted-storage').disabled).toBe(false);
+    $('theme').value = 'auto';
+    $('theme').dispatchEvent(new Event('change'));
+    $('global-rate').value = '1024';
+    $('global-rate').dispatchEvent(new Event('change'));
+    await vi.waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ theme: 'auto', globalRateKbps: 1024 }),
+      ),
+    );
+    expect(api.saveSettings.mock.lastCall[0]).not.toHaveProperty('profiles');
+    expect(document.documentElement.dataset.theme).toBe('auto');
+  });
+
+  it('rejects invalid numeric preferences locally and retains recoverable settings', async () => {
+    const { api } = await boot();
+    $('retry-attempts').value = '6';
+    $('retry-attempts').dispatchEvent(new Event('change'));
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect($('retry-attempts').getAttribute('aria-invalid')).toBe('true');
+    expect($('notice-message').textContent).toContain('between 0 and 5');
+    $('retry-attempts').value = '3';
+    $('retry-attempts').dispatchEvent(new Event('change'));
+    await vi.waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ retryAttempts: 3 })),
+    );
+    expect($('retry-attempts').hasAttribute('aria-invalid')).toBe(false);
+  });
+
+  it('shows privacy capability honestly and waits for a private session setting to be saved', async () => {
+    const { api } = await boot({ privacy: { encryptionAvailable: false } });
+    expect($('encrypted-storage').disabled).toBe(true);
+    expect($('encryption-status').textContent).toContain('unavailable');
+    expect($('history-retention').value).toBe('0');
+    let accept;
+    api.saveSettings.mockImplementation(
+      (settings) =>
+        new Promise((resolve) => {
+          accept = () => resolve(ok(settings));
+        }),
+    );
+    $('private-mode').checked = true;
+    $('private-mode').dispatchEvent(new Event('change'));
+    expect($('private-banner').hidden).toBe(true);
+    await vi.waitFor(() => expect(accept).toBeTypeOf('function'));
+    accept();
+    await vi.waitFor(() => expect($('private-banner').hidden).toBe(false));
+    expect($('private-banner').textContent).toContain('not kept');
+  });
+
+  it('applies bulk actions only to eligible selected jobs and preserves selection across progress', async () => {
+    const { api, events } = await boot({
+      queue: {
+        queue: [job('active', 'downloading'), job('waiting'), job('paused', 'paused')],
+        history: [],
+      },
+    });
+    $('queue-select-all').click();
+    const box = document.querySelector('[data-select-job="active"]');
+    box.focus();
+    events.onProgress({ id: 'active', progress: 40, phase: 'downloading' });
+    expect(box.checked).toBe(true);
+    expect(document.activeElement).toBe(box);
+    document.querySelector('[data-queue-action="pause"]').click();
+    await vi.waitFor(() =>
+      expect(api.queueAction).toHaveBeenCalledWith({ action: 'pause', ids: ['active', 'waiting'] }),
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-queue-action="move"]').disabled).toBe(false),
+    );
+    $('queue-select-all').click();
+    document.querySelector('[data-queue-action="move"]').click();
+    await vi.waitFor(() =>
+      expect(api.queueAction).toHaveBeenLastCalledWith({
+        action: 'move',
+        ids: ['waiting', 'paused'],
+        targetIndex: 0,
+      }),
+    );
+  });
+
+  it('keeps bulk selections after a rejected action', async () => {
+    const { api } = await boot({ queue: { queue: [job('one'), job('two')], history: [] } });
+    api.queueAction.mockResolvedValue({ ok: false, error: { code: 'INVALID_STATE' } });
+    $('queue-select-all').click();
+    document.querySelector('[data-queue-action="cancel"]').click();
+    await vi.waitFor(() =>
+      expect($('notice-message').textContent).toContain('download has changed'),
+    );
+    expect(document.querySelectorAll('#queue-list input:checked')).toHaveLength(2);
+    expect(document.querySelector('[data-queue-action="cancel"]').disabled).toBe(false);
+  });
+
+  it('selects only visible history and keeps it selected when native deletion is cancelled', async () => {
+    const { api } = await boot({
+      queue: {
+        queue: [],
+        history: [
+          job('a', 'completed', { title: 'Keep video' }),
+          job('b', 'failed', { title: 'Remove video' }),
+        ],
+      },
+    });
+    $('history-search').value = 'Remove';
+    $('history-search').dispatchEvent(new Event('input'));
+    $('history-select-visible').click();
+    expect(document.querySelectorAll('#history-list input:checked')).toHaveLength(1);
+    api.deleteHistory.mockResolvedValue(ok({ deleted: 0 }));
+    $('history-delete-selected').click();
+    await vi.waitFor(() => expect(api.deleteHistory).toHaveBeenCalledWith({ ids: ['b'] }));
+    await vi.waitFor(() => expect($('history-delete-selected').disabled).toBe(false));
+    expect(document.querySelector('[data-select-job="b"]').checked).toBe(true);
+    api.deleteHistory.mockResolvedValue(ok({ deleted: 1 }));
+    $('history-delete-selected').click();
+    await vi.waitFor(() =>
+      expect($('notice-message').textContent).toContain('Media files were kept'),
+    );
+  });
+
+  it('applies a named profile to folder, audio, subtitles and rate without copying authentication into it', async () => {
+    const profile = {
+      id: 'p1',
+      name: '<img src=x>',
+      downloadPath: '/music',
+      options: {
+        quality: 'audio',
+        audioFormat: 'mp3',
+        subtitles: true,
+        subtitleLang: 'fi',
+        subtitleAuto: true,
+        rateLimitKbps: 128,
+      },
+    };
+    const { api } = await boot({
+      settings: {
+        language: 'en',
+        downloadPath: '/downloads',
+        cookieSource: 'firefox',
+        profiles: [profile],
+      },
+    });
+    expect($('profile-select').querySelector('img')).toBeNull();
+    $('profile-select').value = 'p1';
+    $('profile-select').dispatchEvent(new Event('change'));
+    $('profile-apply').click();
+    await vi.waitFor(() => expect($('audio-format').value).toBe('mp3'));
+    expect($('download-path').value).toBe('/music');
+    expect($('subtitle-lang').value).toBe('fi');
+    expect($('download-rate').value).toBe('128');
+    expect($('cookie-source').value).toBe('firefox');
+    $('profile-name').value = 'Podcast';
+    api.saveProfile.mockResolvedValue(
+      ok({ profiles: [profile, { ...profile, id: 'p2', name: 'Podcast' }] }),
+    );
+    $('profile-save').click();
+    await vi.waitFor(() =>
+      expect(api.saveProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Podcast',
+          downloadPath: '/music',
+          options: expect.objectContaining({
+            quality: 'audio',
+            audioFormat: 'mp3',
+            subtitles: true,
+            subtitleLang: 'fi',
+            rateLimitKbps: 128,
+          }),
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect($('profile-select').value).toBe('p2'));
+  });
+
+  it('deletes a profile without leaving unusable action buttons enabled', async () => {
+    const { api } = await boot({
+      settings: {
+        downloadPath: '/downloads',
+        profiles: [
+          { id: 'p1', name: 'One', downloadPath: '/downloads', options: { quality: 'best' } },
+        ],
+      },
+    });
+    $('profile-select').value = 'p1';
+    $('profile-select').dispatchEvent(new Event('change'));
+    api.deleteProfile.mockResolvedValue(ok({ profiles: [] }));
+    $('profile-delete').click();
+    await vi.waitFor(() => expect($('profile-status').textContent).toContain('deleted'));
+    expect($('profile-delete').disabled).toBe(true);
+    expect($('profile-apply').disabled).toBe(true);
+  });
+
+  it('combines an explicit video format with audio, shows size and resets formats when the URL changes', async () => {
+    const { api } = await boot();
+    $('video-urls').value = 'https://example.com/video';
+    api.previewDownload.mockResolvedValue(
+      ok({
+        title: '<script>bad()</script>',
+        formats: [
+          {
+            formatId: '137',
+            ext: 'mp4',
+            height: 1080,
+            vcodec: 'avc1',
+            acodec: 'none',
+            hasVideo: true,
+            hasAudio: false,
+            filesize: 1048576,
+          },
+          {
+            formatId: '140',
+            ext: 'm4a',
+            vcodec: 'none',
+            acodec: 'mp4a',
+            hasVideo: false,
+            hasAudio: true,
+            filesize: 1048576,
+          },
+        ],
+      }),
+    );
+    $('preview-button').click();
+    await vi.waitFor(() => expect($('format-select').options.length).toBe(3));
+    $('format-select').value = '137';
+    $('format-select').dispatchEvent(new Event('change'));
+    expect($('format-audio-field').hidden).toBe(false);
+    expect($('format-audio').value).toBe('140');
+    expect($('format-details').textContent).toContain('2 MiB');
+    $('download-form').requestSubmit();
+    await vi.waitFor(() =>
+      expect(api.addDownloads).toHaveBeenCalledWith({
+        urls: ['https://example.com/video'],
+        options: { quality: 'best', formatId: '137+140' },
+      }),
+    );
+    $('video-urls').value = 'https://example.com/other';
+    $('video-urls').dispatchEvent(new Event('input'));
+    expect($('format-controls').hidden).toBe(true);
+    expect($('format-select').options).toHaveLength(0);
+  });
+
+  it('keeps source-specific formats out of a batch and describes disk reserve limits', async () => {
+    const { api } = await boot({
+      diskSpace: { available: true, free: 1100 * 1024 ** 2, total: 10 * 1024 ** 3 },
+    });
+    $('video-urls').value = 'https://example.com/video';
+    api.previewDownload.mockResolvedValue(
+      ok({
+        formats: [
+          { formatId: '18', hasAudio: true, hasVideo: true, filesizeApprox: 100 * 1024 ** 2 },
+        ],
+      }),
+    );
+    $('preview-button').click();
+    await vi.waitFor(() => expect($('format-select').options.length).toBe(2));
+    $('format-select').value = '18';
+    $('format-select').dispatchEvent(new Event('change'));
+    expect($('format-details').textContent).toContain('configured reserve');
+    $('video-urls').value += '\nhttps://example.com/two';
+    $('download-form').requestSubmit();
+    expect(api.addDownloads).not.toHaveBeenCalled();
+    expect($('urls-error').textContent).toContain('one video link');
+  });
+
+  it('validates subtitles and includes caption and per-download bandwidth choices', async () => {
+    const { api } = await boot();
+    $('video-urls').value = 'https://example.com/video';
+    $('subtitles').checked = true;
+    $('subtitles').dispatchEvent(new Event('change'));
+    $('subtitle-lang').value = 'fi,en';
+    $('subtitle-auto').checked = true;
+    $('download-rate').value = '256';
+    $('download-form').requestSubmit();
+    await vi.waitFor(() =>
+      expect(api.addDownloads).toHaveBeenCalledWith({
+        urls: ['https://example.com/video'],
+        options: {
+          quality: 'best',
+          subtitles: true,
+          subtitleLang: 'fi,en',
+          subtitleAuto: true,
+          rateLimitKbps: 256,
+        },
+      }),
+    );
+    await vi.waitFor(() => expect($('add-downloads').disabled).toBe(false));
+    $('video-urls').value = 'https://example.com/other';
+    $('subtitle-lang').value = 'en; bad';
+    $('download-form').requestSubmit();
+    expect(api.addDownloads).toHaveBeenCalledTimes(1);
+    expect($('subtitle-lang').getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('clears original retry format, captions and rate when the user removes them', async () => {
+    const { api } = await boot({
+      queue: {
+        queue: [],
+        history: [
+          job('failed', 'failed', {
+            options: {
+              quality: '720',
+              formatId: '137+140',
+              subtitles: true,
+              subtitleAuto: true,
+              subtitleLang: 'fi',
+              rateLimitKbps: 64,
+            },
+          }),
+        ],
+      },
+    });
+    document.querySelector('[data-action="retryOptions"]').click();
+    expect($('retry-format').value).toBe('137+140');
+    expect($('retry-subtitles').checked).toBe(true);
+    $('retry-format').value = '';
+    $('retry-subtitles').checked = false;
+    $('retry-rate').value = '0';
+    $('retry-form').requestSubmit();
+    await vi.waitFor(() =>
+      expect(api.retryDownload).toHaveBeenCalledWith({
+        id: 'failed',
+        options: { quality: '720', subtitles: false },
+      }),
+    );
+  });
+
+  it('searches and selects playlist ranges, then retrieves the next page using absolute indexes', async () => {
+    const { api } = await boot();
+    $('video-urls').value = 'https://example.com/list';
+    const page = (start) => ({
+      previewId: `page-${start}`,
+      start,
+      pageSize: 500,
+      hasMore: start === 1,
+      title: 'List',
+      entries: [
+        { index: start, title: 'Alpha', url: 'https://example.com/a', available: true },
+        { index: start + 1, title: 'Private', url: null, available: false },
+        { index: start + 2, title: 'Beta', url: 'https://example.com/b', available: true },
+      ],
+    });
+    api.previewPlaylist.mockImplementation(async ({ start }) => ok(page(start)));
+    $('playlist-preview-button').click();
+    await vi.waitFor(() => expect($('playlist-list').children.length).toBe(3));
+    $('playlist-search').value = 'Beta';
+    $('playlist-search').dispatchEvent(new Event('input'));
+    $('playlist-select-all').click();
+    expect($('playlist-list').querySelectorAll('input:checked')).toHaveLength(1);
+    expect($('playlist-next').disabled).toBe(true);
+    $('playlist-clear-selection').click();
+    $('playlist-next').click();
+    await vi.waitFor(() =>
+      expect(api.previewPlaylist).toHaveBeenLastCalledWith(
+        expect.objectContaining({ start: 501, pageSize: 500 }),
+      ),
+    );
+    await vi.waitFor(() => expect($('playlist-page').textContent).toContain('501–503'));
+    $('playlist-range').value = '501-503';
+    $('playlist-apply-range').click();
+    expect($('playlist-list').querySelectorAll('input:checked')).toHaveLength(2);
+    $('playlist-add-selected').click();
+    await vi.waitFor(() =>
+      expect(api.addPlaylistSelection).toHaveBeenCalledWith({
+        previewId: 'page-501',
+        indices: [501, 503],
+        options: { quality: 'best' },
+      }),
+    );
+  });
+
+  it('rejects out-of-page ranges and keeps selections while filtering a playlist', async () => {
+    const { api } = await boot();
+    $('video-urls').value = 'https://example.com/list';
+    api.previewPlaylist.mockResolvedValue(
+      ok({
+        previewId: 'p',
+        entries: [{ index: 1, title: 'Alpha', available: true, url: 'https://example.com/a' }],
+        hasMore: true,
+      }),
+    );
+    $('playlist-preview-button').click();
+    await vi.waitFor(() => expect($('playlist-list').children.length).toBe(1));
+    $('playlist-range').value = '1-9999999';
+    $('playlist-apply-range').click();
+    expect($('playlist-error').textContent).toContain('valid entry');
+    expect($('playlist-add-selected').disabled).toBe(true);
+    $('playlist-range').value = '1';
+    $('playlist-apply-range').click();
+    $('playlist-search').value = 'missing';
+    $('playlist-search').dispatchEvent(new Event('input'));
+    expect($('playlist-no-match').hidden).toBe(false);
+    expect($('playlist-add-selected').disabled).toBe(false);
+    expect($('playlist-next').disabled).toBe(true);
+    expect($('playlist-list').querySelector('input').checked).toBe(true);
+  });
+
+  it('offers guided setup when managed installation is unavailable and copies the exact safe text', async () => {
+    const { api } = await boot({
+      tools: { ...goodTools, setup: { tools: [{ tool: 'ffmpeg', managed: false }] } },
+    });
+    const button = document.querySelector('[data-tool="ffmpeg"][data-tool-action="install"]');
+    expect(button.textContent).toBe('Setup instructions');
+    api.toolAction.mockResolvedValue(
+      ok({
+        tools: goodTools,
+        result: {
+          status: 'guided',
+          command: 'brew install ffmpeg',
+          url: 'https://ffmpeg.org/download.html',
+        },
+      }),
+    );
+    button.click();
+    await vi.waitFor(() => expect($('tool-setup').hidden).toBe(false));
+    expect(api.toolAction).toHaveBeenCalledWith({ tool: 'ffmpeg', action: 'install' });
+    $('tool-setup').querySelector('[data-copy-command]').click();
+    await vi.waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('brew install ffmpeg'),
+    );
+    $('tool-setup').querySelector('[data-setup-url]').click();
+    await vi.waitFor(() =>
+      expect(api.openExternal).toHaveBeenCalledWith('https://ffmpeg.org/download.html'),
+    );
+  });
+
+  it('explains component compatibility in Finnish without claiming a live YouTube test', async () => {
+    const { api } = await boot({ settings: { downloadPath: '/downloads', language: 'fi' } });
+    api.toolAction.mockResolvedValue(
+      ok({
+        tools: goodTools,
+        result: {
+          ejs: {
+            status: 'compatible',
+            version: '1.2.3',
+            runtime: 'deno',
+            liveChallengeTested: false,
+          },
+          ffprobe: { available: false },
+        },
+      }),
+    );
+    $('diagnose-tools').click();
+    await vi.waitFor(() => expect($('ejs-status').textContent).toContain('yhteensopivia'));
+    expect($('tool-setup').textContent).toContain('Varsinaista YouTube-latausta ei ole testattu');
+    expect($('tool-setup').textContent).toContain('ffprobe');
+  });
+
+  it('renders manual app updates and release notes safely without offering unsupported installation', async () => {
+    const { api } = await boot();
+    api.appUpdate.mockResolvedValue(
+      ok({
+        status: 'manual',
+        version: '2.1.0',
+        canInstall: false,
+        releaseUrl: 'https://github.com/miikkij/VideoNinja/releases',
+        releaseNotes: '<img src=x onerror=bad()>',
+      }),
+    );
+    $('app-update-check').click();
+    await vi.waitFor(() => expect($('app-update-status').textContent).toContain('release page'));
+    expect($('app-update-download').hidden).toBe(true);
+    expect($('app-update-install').hidden).toBe(true);
+    expect($('release-notes-text').querySelector('img')).toBeNull();
+    expect($('release-notes-text').textContent).toContain('<img');
+    $('app-update-release').click();
+    await vi.waitFor(() =>
+      expect(api.openExternal).toHaveBeenCalledWith(
+        'https://github.com/miikkij/VideoNinja/releases',
+      ),
+    );
+  });
+
+  it('uses real update progress and blocks restart until active downloads are paused', async () => {
+    const { api, events } = await boot({
+      queue: { queue: [job('active', 'downloading')], history: [] },
+    });
+    events.onAppUpdate({ status: 'downloading', progress: 37 });
+    expect($('app-update-progress').value).toBe(37);
+    expect($('app-update-progress').hidden).toBe(false);
+    events.onAppUpdate({ status: 'downloading' });
+    expect($('app-update-progress').hasAttribute('value')).toBe(false);
+    events.onAppUpdate({ status: 'downloaded', canInstall: true });
+    expect($('app-update-install').disabled).toBe(true);
+    events.onState({ queue: [job('active', 'paused')], history: [] });
+    expect($('app-update-install').disabled).toBe(false);
+    api.appUpdate.mockResolvedValue(ok({ status: 'downloaded', canInstall: true }));
+    $('app-update-install').click();
+    await vi.waitFor(() => expect(api.appUpdate).toHaveBeenCalledWith({ action: 'install' }));
+  });
+
+  it.each([
+    ['en', 'Installing the update. VideoNinja will restart.'],
+    ['fi', 'Päivitystä asennetaan. VideoNinja käynnistyy uudelleen.'],
+  ])(
+    'keeps update controls busy during native installation in %s and recovers after failure',
+    async (language, message) => {
+      const { api, events } = await boot({
+        settings: { language, downloadPath: '/downloads' },
+        appUpdate: { status: 'downloaded', canInstall: true },
+      });
+      api.appUpdate.mockResolvedValue(ok({ status: 'installing', canInstall: true }));
+      $('app-update-install').click();
+      await vi.waitFor(() => expect($('app-update-status').textContent).toBe(message));
+      for (const id of ['app-update-check', 'app-update-download', 'app-update-install']) {
+        expect($(id).disabled).toBe(true);
+        $(id).click();
+      }
+      expect(api.appUpdate).toHaveBeenCalledTimes(1);
+      expect($('app-update-progress').hidden).toBe(true);
+      events.onAppUpdate({ status: 'error', message: 'Installer failed', canInstall: false });
+      expect($('app-update-check').disabled).toBe(false);
+      expect($('app-update-install').hidden).toBe(true);
+      events.onAppUpdate({ status: 'downloaded', canInstall: true });
+      expect($('app-update-install').disabled).toBe(false);
+      expect($('app-update-install').hidden).toBe(false);
+    },
+  );
+
+  it('offers a focused authentication remedy without automatically using account cookies', async () => {
+    const { api } = await boot({
+      settings: { language: 'fi', downloadPath: '/downloads' },
+      queue: {
+        queue: [],
+        history: [job('auth', 'failed', { errorCode: 'auth', error: 'Login required' })],
+      },
+    });
+    const row = document.querySelector('[data-id="auth"]');
+    expect(row.querySelector('.error-area').textContent).toContain('evästelähde');
+    row.querySelector('.error-area button').click();
+    expect($('retry-dialog').open).toBe(true);
+    expect(document.activeElement).toBe($('retry-cookie-source'));
+    expect(api.retryDownload).not.toHaveBeenCalled();
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes scheduled pauses and duplicate skips from failures with usable actions', async () => {
+    const { api } = await boot({
+      queue: {
+        queue: [job('scheduled', 'paused', { phase: 'waiting-schedule' })],
+        history: [job('duplicate', 'skipped')],
+      },
+    });
+    expect(document.querySelector('[data-id="scheduled"] .download-state').textContent).toContain(
+      'scheduled',
+    );
+    const duplicate = document.querySelector('[data-id="duplicate"]');
+    expect(duplicate.textContent).toContain('Already downloaded');
+    expect(duplicate.querySelector('[data-action="quickRetry"]')).toBeNull();
+    duplicate.querySelector('[data-action="reviewDuplicates"]').click();
+    expect(document.activeElement).toBe($('skip-duplicates'));
+    expect(api.retryDownload).not.toHaveBeenCalled();
+  });
+
+  it('has translations and accessible names for all new static controls in both languages', async () => {
+    await boot();
+    for (const language of ['en', 'fi']) {
+      window.VideoNinjaI18n.setLanguage(language);
+      for (const element of document.querySelectorAll('[data-i18n]'))
+        expect(element.textContent).not.toBe(element.dataset.i18n);
+      for (const field of document.querySelectorAll(
+        'input:not([type="checkbox"]),select,textarea',
+      )) {
+        expect(document.querySelector(`label[for="${field.id}"]`), field.id).not.toBeNull();
+      }
+    }
+  });
+
+  it('lets quality preferences replace an exact format and saves a reusable profile without a URL', async () => {
+    const { api } = await boot();
+    $('video-urls').value = 'https://example.com/one';
+    api.previewDownload.mockResolvedValue(
+      ok({ formats: [{ formatId: '18', hasVideo: true, hasAudio: true }] }),
+    );
+    $('preview-button').click();
+    await vi.waitFor(() => expect($('format-select').options.length).toBe(2));
+    $('format-select').value = '18';
+    $('format-select').dispatchEvent(new Event('change'));
+    $('quality').value = '720';
+    $('quality').dispatchEvent(new Event('change'));
+    expect($('format-select').value).toBe('');
+    $('format-select').value = '18';
+    $('video-urls').value = '';
+    $('profile-name').value = 'Reusable';
+    api.saveProfile.mockResolvedValue(ok({ profiles: [] }));
+    $('profile-save').click();
+    await vi.waitFor(() =>
+      expect(api.saveProfile).toHaveBeenCalledWith({
+        name: 'Reusable',
+        downloadPath: '/downloads',
+        options: { quality: '720' },
+      }),
+    );
+  });
+
+  it('repairs a disk error by choosing a folder and opening retry options for that destination', async () => {
+    const { api } = await boot({
+      queue: {
+        queue: [],
+        history: [job('disk', 'failed', { errorCode: 'disk-full', error: 'No space' })],
+      },
+    });
+    api.chooseDownloadDirectory.mockResolvedValue(ok('/new-destination'));
+    document.querySelector('[data-id="disk"] .error-area button').click();
+    await vi.waitFor(() => expect($('retry-dialog').open).toBe(true));
+    expect($('retry-destination').textContent).toContain('/new-destination');
+    expect(api.retryDownload).not.toHaveBeenCalled();
+    $('retry-form').requestSubmit();
+    await vi.waitFor(() =>
+      expect(api.retryDownload).toHaveBeenCalledWith({
+        id: 'disk',
+        options: { quality: '1080', subtitles: false },
+      }),
+    );
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ downloadPath: '/new-destination' }),
+    );
   });
 });

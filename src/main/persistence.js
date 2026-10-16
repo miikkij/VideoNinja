@@ -2,14 +2,42 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { normalizeOptions, validateUrl } = require('./downloadOptions');
+const { MAX_CONFIG_BYTES } = require('./storageLimits');
 
 const SCHEMA_VERSION = 1;
 const MAX_QUEUE_ITEMS = 500;
 const MAX_HISTORY_ITEMS = 100;
 const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_ERROR_LENGTH = 2000;
-const MAX_CONFIG_BYTES = 10 * 1024 * 1024;
-const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'skipped']);
+const FEATURE_DEFAULTS = Object.freeze({
+  retryAttempts: 2,
+  retryDelaySeconds: 15,
+  diskReserveMb: 1024,
+  globalRateKbps: 0,
+  scheduleEnabled: false,
+  scheduleStart: '00:00',
+  scheduleEnd: '06:00',
+  historyRetentionDays: 0,
+  privateMode: false,
+  encryptedStorage: false,
+  skipDuplicates: true,
+  stallTimeoutSeconds: 180,
+  processingTimeoutSeconds: 900,
+  theme: 'auto',
+  notifications: false,
+  checkUpdatesOnStartup: true,
+});
+const SETTING_RANGES = Object.freeze({
+  retryAttempts: [0, 5],
+  retryDelaySeconds: [1, 300],
+  diskReserveMb: [0, 1048576],
+  globalRateKbps: [0, 1000000],
+  historyRetentionDays: [0, 3650],
+  stallTimeoutSeconds: [30, 3600],
+  processingTimeoutSeconds: [60, 7200],
+});
+const clockTime = (value) => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
 const isRecord = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : '');
 
@@ -51,13 +79,84 @@ function isAbsoluteFilePath(value) {
 function sanitizeMetadata(value) {
   if (!isRecord(value)) return undefined;
   const result = {};
-  for (const key of ['id', 'title', 'ext']) {
+  for (const key of ['id', 'title', 'ext', 'extractor']) {
     if (typeof value[key] === 'string')
       result[key] = value[key].slice(0, key === 'title' ? 512 : 256);
   }
   if (Number.isFinite(value.duration) && value.duration >= 0)
     result.duration = Math.min(value.duration, 31536000);
+  for (const key of ['filesize', 'filesizeApprox'])
+    if (Number.isSafeInteger(value[key]) && value[key] >= 0) result[key] = value[key];
   return result;
+}
+
+function validateFeatureSettings(input) {
+  for (const [key, [min, max]] of Object.entries(SETTING_RANGES)) {
+    if (
+      input[key] !== undefined &&
+      (!Number.isInteger(input[key]) || input[key] < min || input[key] > max)
+    )
+      throw new Error(`Invalid ${key}.`);
+  }
+  for (const key of [
+    'scheduleEnabled',
+    'privateMode',
+    'encryptedStorage',
+    'skipDuplicates',
+    'notifications',
+    'checkUpdatesOnStartup',
+  ])
+    if (input[key] !== undefined && typeof input[key] !== 'boolean')
+      throw new Error(`Invalid ${key}.`);
+  for (const key of ['scheduleStart', 'scheduleEnd'])
+    if (input[key] !== undefined && !clockTime(input[key])) throw new Error(`Invalid ${key}.`);
+  if (input.theme !== undefined && !['auto', 'light', 'dark'].includes(input.theme))
+    throw new Error('Invalid theme.');
+  if (input.scheduleEnabled && input.scheduleStart === input.scheduleEnd)
+    throw new Error('Choose different schedule start and end times.');
+}
+
+function sanitizeProfiles(raw) {
+  if (!Array.isArray(raw)) return [];
+  const profiles = [],
+    ids = new Set();
+  for (const item of raw.slice(0, 20)) {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== 'string' ||
+      !/^[a-zA-Z0-9_-]{1,128}$/.test(item.id) ||
+      ids.has(item.id) ||
+      typeof item.name !== 'string' ||
+      !item.name.trim() ||
+      item.name.length > 80 ||
+      !isAbsoluteFilePath(item.downloadPath)
+    )
+      continue;
+    try {
+      const options = normalizeOptions(item.options);
+      // Profiles never carry login material or site-specific diagnostics.
+      const safe = {};
+      for (const key of [
+        'quality',
+        'audioFormat',
+        'subtitles',
+        'subtitleAuto',
+        'subtitleLang',
+        'rateLimitKbps',
+      ])
+        if (options[key] !== undefined) safe[key] = options[key];
+      profiles.push({
+        id: item.id,
+        name: item.name.trim(),
+        downloadPath: item.downloadPath,
+        options: safe,
+      });
+      ids.add(item.id);
+    } catch {
+      /* A malformed profile cannot become an executable job. */
+    }
+  }
+  return profiles;
 }
 
 /** Recover settings independently, so one obsolete option does not erase the folder. */
@@ -73,7 +172,19 @@ function sanitizeSettings(raw) {
     quality: 'best',
     jsRuntime: 'auto',
     maxConcurrent: 1,
+    ...FEATURE_DEFAULTS,
+    profiles: sanitizeProfiles(input.profiles),
   };
+  for (const key of Object.keys(FEATURE_DEFAULTS)) {
+    if (input[key] === undefined) continue;
+    try {
+      validateFeatureSettings({ [key]: input[key] });
+      result[key] = input[key];
+    } catch {
+      /* Restore valid preferences independently. */
+    }
+  }
+  if (result.scheduleStart === result.scheduleEnd) result.scheduleEnabled = false;
   if (
     Number.isInteger(input.maxConcurrent) &&
     input.maxConcurrent >= 1 &&
@@ -140,7 +251,13 @@ function sanitizeQueueState(
     now = () => new Date().toISOString(),
   } = {},
 ) {
-  const result = { schemaVersion: SCHEMA_VERSION, queue: [], history: [], warnings: [] };
+  const result = {
+    schemaVersion: SCHEMA_VERSION,
+    queue: [],
+    history: [],
+    archive: [],
+    warnings: [],
+  };
   if (raw === undefined || raw === null) return result;
   if (
     !isRecord(raw) ||
@@ -191,6 +308,39 @@ function sanitizeQueueState(
       error: typeof entry.error === 'string' ? redactErrorText(entry.error, entry) : null,
       filepath: isAbsoluteFilePath(entry.filepath) ? entry.filepath : null,
     };
+    for (const key of ['attempts', 'retryCount'])
+      if (Number.isInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 100)
+        restored[key] = entry[key];
+    if (timestamp(entry.retryAt)) restored.retryAt = entry.retryAt;
+    for (const key of ['errorCode', 'errorAction'])
+      if (typeof entry[key] === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(entry[key]))
+        restored[key] = entry[key];
+    for (const key of ['errorRetryable', 'pausedBySchedule', 'private'])
+      if (typeof entry[key] === 'boolean') restored[key] = entry[key];
+    if (restored.private) throw new Error('Private jobs are not restored.');
+    if (
+      status === 'pending' &&
+      ['waiting-retry', 'waiting-disk', 'waiting-schedule', 'waiting-duplicate'].includes(
+        entry.phase,
+      )
+    )
+      restored.phase = entry.phase;
+    if (isRecord(entry.integrity) && ['verified', 'size-only'].includes(entry.integrity.status)) {
+      restored.integrity = { status: entry.integrity.status };
+      for (const key of ['size', 'duration'])
+        if (Number.isFinite(entry.integrity[key]) && entry.integrity[key] >= 0)
+          restored.integrity[key] = entry.integrity[key];
+      if (Array.isArray(entry.integrity.streams))
+        restored.integrity.streams = entry.integrity.streams
+          .slice(0, 64)
+          .filter(isRecord)
+          .map((stream) => ({
+            type: text(stream.type, 32),
+            codec: text(stream.codec, 80),
+          }));
+      if (typeof entry.integrity.warning === 'string')
+        restored.integrity.warning = redactErrorText(entry.integrity.warning, entry).slice(0, 256);
+    }
     const destination = TERMINAL_STATES.has(status) ? result.history : result.queue;
     if (destination.length >= (TERMINAL_STATES.has(status) ? maxHistory : maxQueue))
       throw new Error('Saved job limit reached.');
@@ -218,6 +368,29 @@ function sanitizeQueueState(
   if (dropped)
     result.warnings.push(`${dropped} invalid, duplicate or excess saved jobs were ignored.`);
   if (migratedIds) result.warnings.push(`${migratedIds} legacy jobs received new IDs.`);
+  const archiveKeys = new Set();
+  for (const entry of (Array.isArray(raw.archive) ? raw.archive : []).slice(0, 10000)) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.key !== 'string' ||
+      entry.key.length > 4096 ||
+      !entry.key ||
+      archiveKeys.has(entry.key) ||
+      !timestamp(entry.completedAt)
+    )
+      continue;
+    if (!isAbsoluteFilePath(entry.outputPath) || !isAbsoluteFilePath(entry.filepath)) continue;
+    result.archive.push({
+      key: entry.key,
+      extractor: text(entry.extractor, 256),
+      id: text(entry.id, 256),
+      profile: text(entry.profile, 1024),
+      completedAt: entry.completedAt,
+      filepath: entry.filepath,
+      outputPath: entry.outputPath,
+    });
+    archiveKeys.add(entry.key);
+  }
   return result;
 }
 
@@ -305,6 +478,10 @@ module.exports = {
   MAX_HISTORY_ITEMS,
   MAX_CONCURRENT_DOWNLOADS,
   MAX_ERROR_LENGTH,
+  FEATURE_DEFAULTS,
+  SETTING_RANGES,
+  validateFeatureSettings,
+  sanitizeProfiles,
   isAbsoluteFilePath,
   redactErrorText,
   sanitizeSettings,
