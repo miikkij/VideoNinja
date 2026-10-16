@@ -192,9 +192,14 @@ changes before committing.
 
 ## Submitting changes
 
-Create a focused branch, run the relevant checks, update affected documentation
-and describe observable behavior and verification in the pull request. Prefer
-Conventional Commits such as `fix: preserve paused downloads during shutdown`.
+This is a solo-maintainer repository. Authorized maintenance changes go directly
+to `main`: run the relevant checks, update affected documentation, commit the
+specific paths and push to `origin/main`. Create a branch or pull request only
+when the owner explicitly requests one. Confirm CI on the pushed commit.
+Prefer Conventional Commits such as `fix: preserve paused downloads during shutdown`.
+
+Routine Dependabot version-update pull requests are disabled. Review dependency
+updates during maintenance and keep the audit gate and security alerts enabled.
 
 Use the issue templates for bugs and feature requests. Follow
 [SECURITY.md](SECURITY.md) for vulnerabilities; do not include exploit details,
