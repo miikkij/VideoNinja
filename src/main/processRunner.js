@@ -86,7 +86,15 @@ function createProcessRunner(deps = {}) {
   function runProcess(
     executable,
     args,
-    { cwd, signal, onStdoutLine = () => {}, onStderrLine = () => {}, timeoutMs = 0, maxLine } = {},
+    {
+      cwd,
+      signal,
+      onStdoutLine = () => {},
+      onStderrLine = () => {},
+      timeoutMs = 0,
+      maxLine,
+      maxOutputBytes = 0,
+    } = {},
   ) {
     if (signal?.aborted) return Promise.reject(abortError());
     return new Promise((resolve, reject) => {
@@ -106,19 +114,31 @@ function createProcessRunner(deps = {}) {
       let settled = false,
         cancelled = false,
         timedOut = false,
+        outputExceeded = false,
+        outputBytes = 0,
         processError = null,
         cleanup = Promise.resolve(),
         timer;
       const stdout = createLineDecoder(onStdoutLine, maxLine);
       const stderr = createLineDecoder(onStderrLine, maxLine);
-      child.stdout.on('data', (chunk) => stdout.write(chunk));
-      child.stderr.on('data', (chunk) => stderr.write(chunk));
       const cancel = () => {
         if (!cancelled) {
           cancelled = true;
           cleanup = stopTree(child);
         }
       };
+      const consume = (decoder, chunk) => {
+        if (cancelled) return;
+        outputBytes += chunk.length;
+        if (maxOutputBytes > 0 && outputBytes > maxOutputBytes) {
+          outputExceeded = true;
+          cancel();
+          return;
+        }
+        decoder.write(chunk);
+      };
+      child.stdout.on('data', (chunk) => consume(stdout, chunk));
+      child.stderr.on('data', (chunk) => consume(stderr, chunk));
       signal?.addEventListener('abort', cancel, { once: true });
       if (signal?.aborted) cancel();
       if (timeoutMs > 0)
@@ -137,7 +157,8 @@ function createProcessRunner(deps = {}) {
         stdout.end();
         stderr.end();
         await cleanup;
-        if (timedOut) reject(new Error('The media tool timed out. Please retry.'));
+        if (outputExceeded) reject(new Error('The media tool exceeded its output limit.'));
+        else if (timedOut) reject(new Error('The media tool timed out. Please retry.'));
         else if (cancelled) reject(abortError());
         else if (processError) reject(processError);
         else resolve({ code, signal: exitSignal });

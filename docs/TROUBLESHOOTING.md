@@ -103,6 +103,29 @@ A saved queue entry may retain older options after default Settings change.
 Retry that entry with new options or add a fresh job when you need different
 settings.
 
+## Playlist entries are missing, unavailable or expired
+
+Paste the playlist URL as the first input link and choose **Choose from playlist**.
+This only fetches metadata. Select entries and choose **Add selected to queue**
+when you want them downloaded; nothing is preselected. Ordinary **Add to queue**
+does not expand an entire playlist and is restricted to one media item per job.
+
+Private, deleted, unavailable and invalid entries are disabled. Nested playlists
+cannot be selected. A preview cannot grant access that your tools/account do not
+already have; correct the supported cookie settings if appropriate, then preview
+again. Public metadata does not guarantee that the later download succeeds.
+
+Only the first 500 entries are shown. A notice appears when more exist; there is
+no next-page control. Use a smaller playlist or individual URLs for later entries.
+Selections must fit within the queue's remaining 500-job capacity. A full-queue
+error keeps the current selection so you can choose fewer entries or wait for
+other jobs to finish. Repeated URLs within the selection are added once.
+
+The preview expires after 15 minutes and is invalidated when closed, replaced or
+successfully submitted. Close and open it again after expiry. Closing while it is
+loading cancels that inspection; it does not stop active downloads. Previews are
+not saved across restarts.
+
 ## Browser cookies cannot be read
 
 Browser locks, permissions and encryption can prevent cookie extraction. Closing
@@ -122,11 +145,17 @@ issue. Read [Security](../SECURITY.md) before sharing diagnostics.
 | Audio-only is not MP3                                                   | **Original format** keeps the source audio format. Select MP3 or another conversion format explicitly; conversion needs ffmpeg.                                       |
 | Download appears complete while the row still says combining/processing | ffmpeg may still be merging or converting. Completion waits for the final path.                                                                                       |
 | Open file or Show in folder fails                                       | The file may have been moved/deleted, be outside its original folder after link resolution, or have an unsupported media extension. Inspect the destination directly. |
-| A repeated URL finishes without transferring again                      | Continuation/no-overwrite behavior can reuse an existing completed file. Filenames include the source ID.                                                             |
+| A repeated URL finishes without transferring again                      | The same URL/quality can reuse an existing completed file. Different quality/audio choices and URL aliases use distinct names.                                        |
 | A paused job restarts instead of continuing                             | Resume depends on the source, partial files and selected format. The app retains partial files but cannot guarantee source-server resume support.                     |
 
 Do not remove partial files if you want a continuation attempt. A cancelled or
 failed job can also leave partial media; history clearing does not remove it.
+
+Filenames include the source ID, quality/audio format and a short hash of the
+input URL. This keeps aliases and concurrent quality choices from sharing output
+files. A different URL for the same video may therefore create a separate file.
+The new template does not rename older files or automatically find their partials;
+keep the old files and inspect the folder before removing anything.
 
 ## Disk-space status is unavailable or low
 
@@ -140,17 +169,27 @@ warnings do not reserve space or guarantee that a job fits.
 
 ## Queue, pause, cancellation and restart
 
-The queue runs one job at a time. **Pause** stops an active process and retains
-the job and partial files; **Resume** makes it eligible again. **Cancel** records
-a cancelled attempt in history. The next job waits until the previous process
-tree exits, so cancellation may not be instantaneous.
+Set **Maximum simultaneous downloads** to 1–5 in Settings; the default is 1.
+Raising it fills available slots. Lowering it leaves active jobs running and
+delays new starts until the active count falls below the new limit. Network
+bandwidth, disk space and source-site limits are shared across the active jobs.
+Lower the setting if transfers slow down or the source reports rate limits.
 
-Pending/paused items can move up or down. Add up to 100 links per submission;
-the total queue limit is 500. History keeps the latest 100 entries. Its search
+**Pause** stops that job's process and retains the job and partial files;
+**Resume** makes it eligible again. **Cancel** records a cancelled attempt in
+history. Other active jobs continue. The cancelled/paused process retains its
+slot until it exits, so replacement work may not start immediately.
+
+Jobs for the same URL and destination run sequentially to protect partial files,
+even when another slot is free. Unrelated URLs can fill the remaining slots.
+
+Pending/paused items can move up or down. Add up to 100 ordinary links per
+submission, or select entries from the playlist preview. Each batch removes
+repeated URLs and must fit within the total queue limit of 500. History keeps the latest 100 entries. Its search
 filters the displayed history, and **Export** writes a redacted JSON file after a
 native save dialog. **Clear history** asks for confirmation and keeps all media.
 
-On a normal quit, an active job is checkpointed as pending and stopped. Restart
+On a normal quit, every active job is checkpointed as pending and stopped. Restart
 can resume pending work; paused jobs remain paused. To keep work stopped after
 restart, pause it before quitting. Resume progress may begin at zero until
 yt-dlp reports the existing partial download.
@@ -206,8 +245,9 @@ pnpm test:smoke --packaged
 ```
 
 The media smoke requires yt-dlp, ffmpeg and ffprobe. It generates its own fixtures
-on a temporary loopback server, tests download/merge/audio conversion and checks
-streams with ffprobe. It does not contact a live video service. See
+on a temporary loopback server, tests download/merge/audio conversion, playlist
+inspection and parallel aliases, and checks streams with ffprobe. It does not
+contact a live video service. See
 [Contributing](../CONTRIBUTING.md) for coverage and packaging details.
 `pnpm audit` alone is pnpm's built-in audit, not the repository's two-stage
 `pnpm run audit` gate.

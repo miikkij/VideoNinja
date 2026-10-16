@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const tools = require('./tools');
 const { normalizeOptions, validateUrl, QUALITY_PRESETS } = require('./downloadOptions');
 const { runProcess, abortError } = require('./processRunner');
@@ -9,8 +10,11 @@ const PROTOCOL = Object.freeze({
   stage: 'VN_STAGE:',
   file: 'VN_FILE:',
   metadata: 'VN_META:',
+  playlist: 'VN_PLAYLIST:',
 });
 const MAX_ERROR = 8192;
+const PLAYLIST_LIMIT = 500;
+const PLAYLIST_OUTPUT_LIMIT = 8 * 1024 * 1024;
 
 function redactError(value, sensitive = []) {
   let text = String(value || 'The media tool could not finish the download.');
@@ -44,11 +48,10 @@ function selectRuntime(options, toolInfo) {
   return selected;
 }
 
-function buildCommonArgs(options, toolInfo, ffmpegInfo) {
+function buildCommonArgs(options, toolInfo, ffmpegInfo, { playlist = false } = {}) {
   const args = [
     ...tools.SAFE_YTDLP_FLAGS,
     '--no-js-runtimes',
-    '--no-playlist',
     '--color',
     'never',
     '--encoding',
@@ -60,6 +63,8 @@ function buildCommonArgs(options, toolInfo, ffmpegInfo) {
     '--fragment-retries',
     '3',
   ];
+  if (playlist) args.push('--yes-playlist');
+  else args.push('--no-playlist', '--playlist-items', '1');
   const runtime = selectRuntime(options, toolInfo);
   if (runtime) args.push('--js-runtimes', `${runtime.name}:${runtime.path}`);
   if (ffmpegInfo?.available) args.push('--ffmpeg-location', ffmpegInfo.path);
@@ -74,8 +79,12 @@ function buildCommonArgs(options, toolInfo, ffmpegInfo) {
 }
 
 function buildDownloadArgs(url, outputRoot, input, toolInfo, ffmpegInfo) {
+  url = validateUrl(url);
   const options = normalizeOptions(input);
   const args = buildCommonArgs(options, toolInfo, ffmpegInfo);
+  const sourceHash = createHash('sha256').update(url).digest('hex').slice(0, 16);
+  const quality =
+    options.quality === 'audio' ? `audio-${options.audioFormat || 'original'}` : options.quality;
   args.push(
     '--no-simulate',
     '--newline',
@@ -88,7 +97,10 @@ function buildDownloadArgs(url, outputRoot, input, toolInfo, ffmpegInfo) {
   );
   args.push(
     '-o',
-    path.join(outputRoot.replaceAll('%', '%%'), '%(title).180B [%(extractor_key)s-%(id)s].%(ext)s'),
+    path.join(
+      outputRoot.replaceAll('%', '%%'),
+      `%(title).140B [%(extractor_key).24B-%(id).40B] [${quality}-${sourceHash}].%(ext)s`,
+    ),
     '-f',
     QUALITY_PRESETS[options.quality],
   );
@@ -108,7 +120,7 @@ function buildDownloadArgs(url, outputRoot, input, toolInfo, ffmpegInfo) {
     `before_dl:${PROTOCOL.metadata}{"title":%(title)j,"id":%(id)j,"duration":%(duration|0)j,"ext":%(ext)j}`,
   );
   args.push('--print', `after_move:${PROTOCOL.file}%(filepath)j`);
-  args.push('--', validateUrl(url));
+  args.push('--', url);
   return args;
 }
 
@@ -125,11 +137,98 @@ function safeMetadata(input) {
   };
 }
 
+function safePlaylist(input) {
+  if (!input || !['playlist', 'multi_video'].includes(input.type) || !Array.isArray(input.entries))
+    throw new Error('This URL did not provide a playlist.');
+  if (input.entries.length > PLAYLIST_LIMIT + 1)
+    throw new Error('The playlist exceeded the preview entry limit.');
+  return {
+    title: typeof input.title === 'string' ? input.title.slice(0, 500) : '',
+    entries: input.entries.slice(0, PLAYLIST_LIMIT).map((item, offset) => {
+      const entry = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
+      const index =
+        Number.isSafeInteger(entry.playlist_index) && entry.playlist_index > 0
+          ? entry.playlist_index
+          : offset + 1;
+      const youtube = [entry.ie_key, entry.extractor_key].some(
+        (extractor) => typeof extractor === 'string' && extractor.toLowerCase() === 'youtube',
+      );
+      let candidate = entry.url || entry.webpage_url || (youtube ? entry.id : null);
+      if (youtube && typeof candidate === 'string' && /^[\w-]{11}$/u.test(candidate))
+        candidate = `https://www.youtube.com/watch?v=${candidate}`;
+      let url = null;
+      try {
+        url = validateUrl(candidate);
+      } catch {
+        /* Unavailable or unsafe entries remain visible, but cannot be selected. */
+      }
+      const unavailable =
+        ['playlist', 'multi_video'].includes(entry._type) ||
+        ['private', 'premium_only', 'subscriber_only', 'needs_auth', 'unavailable'].includes(
+          entry.availability,
+        ) ||
+        /^\[(?:private|deleted|unavailable) video\]$/iu.test(entry.title || '');
+      return {
+        id: typeof entry.id === 'string' && entry.id ? entry.id.slice(0, 200) : `entry-${index}`,
+        index,
+        title: typeof entry.title === 'string' ? entry.title.slice(0, 500) : '',
+        url: unavailable ? null : url,
+        duration:
+          typeof entry.duration === 'number' &&
+          Number.isFinite(entry.duration) &&
+          entry.duration >= 0
+            ? entry.duration
+            : null,
+        available: Boolean(url) && !unavailable,
+      };
+    }),
+    hasMore: input.entries.length > PLAYLIST_LIMIT,
+  };
+}
+
 /** Dependency injection keeps process, filesystem and network tests isolated. */
 function createDownloader(deps = {}) {
   const fileSystem = deps.fs || fs;
   const execute = deps.runProcess || runProcess;
   const toolService = deps.tools || tools;
+  const writers = new Map();
+  const platform = deps.platform || process.platform;
+
+  function acquireWriter(key, signal) {
+    if (signal?.aborted) return Promise.reject(abortError());
+    let state = writers.get(key);
+    const release = () => {
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const next = state.waiters.shift();
+        if (next) {
+          next.signal?.removeEventListener('abort', next.cancel);
+          next.resolve(release());
+        } else writers.delete(key);
+      };
+    };
+    if (!state) {
+      state = { waiters: [] };
+      writers.set(key, state);
+      return Promise.resolve(release());
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve,
+        signal,
+        cancel: () => {
+          const index = state.waiters.indexOf(waiter);
+          if (index >= 0) state.waiters.splice(index, 1);
+          reject(abortError());
+        },
+      };
+      state.waiters.push(waiter);
+      signal?.addEventListener('abort', waiter.cancel, { once: true });
+      if (signal?.aborted) waiter.cancel();
+    });
+  }
 
   async function getTools(signal) {
     if (signal?.aborted) throw abortError();
@@ -164,6 +263,7 @@ function createDownloader(deps = {}) {
     url = validateUrl(url);
     const options = normalizeOptions(input);
     const secrets = [url, options.cookieFile, options.referer, options.userAgent, outputPath];
+    let releaseWriter;
     try {
       if (typeof outputPath !== 'string' || !path.isAbsolute(outputPath))
         throw new Error('Choose an absolute download folder.');
@@ -171,6 +271,8 @@ function createDownloader(deps = {}) {
       if (!(await fileSystem.stat(root)).isDirectory())
         throw new Error('The download folder is unavailable.');
       await fileSystem.access(root, 2);
+      const writerKey = JSON.stringify([platform === 'win32' ? root.toLowerCase() : root, url]);
+      releaseWriter = await acquireWriter(writerKey, signal);
       const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
       const args = buildDownloadArgs(url, root, options, ytdlpInfo, ffmpegInfo);
       let filename = null,
@@ -238,6 +340,8 @@ function createDownloader(deps = {}) {
     } catch (error) {
       if (error.name === 'AbortError' || signal?.aborted) throw abortError();
       return { success: false, filepath: null, error: redactError(error.message, secrets) };
+    } finally {
+      releaseWriter?.();
     }
   }
 
@@ -287,6 +391,60 @@ function createDownloader(deps = {}) {
     }
   }
 
+  async function fetchPlaylist(url, input = {}, { signal } = {}) {
+    url = validateUrl(url);
+    const options = normalizeOptions(input);
+    const secrets = [url, options.cookieFile, options.referer, options.userAgent];
+    try {
+      const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
+      const args = [
+        ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo, { playlist: true }),
+        '--flat-playlist',
+        '--skip-download',
+        '--simulate',
+        '--playlist-end',
+        String(PLAYLIST_LIMIT + 1),
+        '--print',
+        `playlist:${PROTOCOL.playlist}{"title":%(title|)j,"type":%(_type|)j,"entries":%(entries.:.{_type,id,title,url,webpage_url,duration,ie_key,extractor_key,availability,playlist_index})j}`,
+        '--',
+        url,
+      ];
+      let playlist = null,
+        parseError = null,
+        errorOutput = '';
+      const result = await execute(ytdlpInfo.path, args, {
+        signal,
+        timeoutMs: 60000,
+        maxLine: PLAYLIST_OUTPUT_LIMIT,
+        maxOutputBytes: PLAYLIST_OUTPUT_LIMIT,
+        cwd: path.dirname(ytdlpInfo.path),
+        onStdoutLine: (line) => {
+          if (!line.startsWith(PROTOCOL.playlist) || parseError) return;
+          try {
+            if (line.length > PLAYLIST_OUTPUT_LIMIT)
+              throw new Error('The playlist exceeded the preview output limit.');
+            if (playlist) throw new Error('Nested playlist previews are not supported.');
+            playlist = safePlaylist(JSON.parse(line.slice(PROTOCOL.playlist.length)));
+          } catch {
+            parseError = new Error('Unable to read the playlist within the preview limits.');
+          }
+        },
+        onStderrLine: (line) => {
+          errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+        },
+      });
+      if (signal?.aborted) throw abortError();
+      if (result.code !== 0) throw new Error(errorOutput || 'Unable to read the playlist.');
+      if (parseError) throw parseError;
+      if (!playlist) throw new Error('This URL did not provide a playlist.');
+      return playlist;
+    } catch (error) {
+      if (error.name === 'AbortError' || signal?.aborted) throw abortError();
+      // eslint-disable-next-line preserve-caught-error -- Discard raw subprocess details and credentials.
+      throw new Error(redactError(error.message, secrets));
+    }
+  }
+
   async function getDiskSpace(dirPath) {
     try {
       if (typeof dirPath !== 'string' || !path.isAbsolute(dirPath))
@@ -312,7 +470,7 @@ function createDownloader(deps = {}) {
       };
     }
   }
-  return { downloadVideo, fetchMetadata, getDiskSpace };
+  return { downloadVideo, fetchMetadata, fetchPlaylist, getDiskSpace };
 }
 
 function formatBytes(bytes) {
@@ -331,6 +489,7 @@ module.exports = {
   checkFfmpegAvailability: tools.checkFfmpegAvailability,
   formatBytes,
   PROTOCOL,
+  PLAYLIST_LIMIT,
   redactError,
   isWithin,
   buildDownloadArgs,

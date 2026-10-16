@@ -55,7 +55,7 @@ function createToolService(deps = {}) {
     args,
     parseVersion = (text) => text.trim().split(/\r?\n/u)[0],
     supported = () => true,
-    { signal } = {},
+    { signal, acceptedExitCodes = [] } = {},
   ) {
     const rejected = [];
     for (const candidate of candidates(name)) {
@@ -64,14 +64,29 @@ function createToolService(deps = {}) {
         const resolved = await fileSystem.realpath(candidate);
         if (!(await fileSystem.stat(resolved)).isFile()) continue;
         if (platform !== 'win32') await fileSystem.access(resolved, 1);
-        const { stdout, stderr = '' } = await execute(resolved, args, {
-          shell: false,
-          windowsHide: true,
-          timeout: 5000,
-          maxBuffer: 65536,
-          cwd: paths.dirname(resolved),
-          signal,
-        });
+        let output;
+        try {
+          output = await execute(resolved, args, {
+            shell: false,
+            windowsHide: true,
+            timeout: 5000,
+            maxBuffer: 65536,
+            cwd: paths.dirname(resolved),
+            signal,
+          });
+        } catch (error) {
+          // Bellard QuickJS prints its version through --help and deliberately exits 1.
+          // Only that normal exit is accepted; timeouts, aborts and signals still fail.
+          if (
+            signal?.aborted ||
+            error.killed ||
+            error.signal ||
+            !acceptedExitCodes.includes(error.code)
+          )
+            throw error;
+          output = error;
+        }
+        const { stdout = '', stderr = '' } = output;
         const version = parseVersion(`${stdout}\n${stderr}`);
         if (!version || !supported(version)) {
           rejected.push({ path: resolved, version });
@@ -128,7 +143,10 @@ function createToolService(deps = {}) {
     const checks = await Promise.all(
       definitions.map(async ([name, executable, args, parse, supported]) => ({
         name,
-        ...(await discover(executable, args, parse, supported, { signal })),
+        ...(await discover(executable, args, parse, supported, {
+          signal,
+          acceptedExitCodes: name === 'quickjs' ? [1] : [],
+        })),
       })),
     );
     return checks;

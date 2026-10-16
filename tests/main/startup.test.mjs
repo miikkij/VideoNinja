@@ -21,6 +21,64 @@ describe('start at login', () => {
       createStartup(app, { platform: 'win32', env: {} }).setEnabled(true),
     ).rejects.toThrow();
   });
+  it('registers and queries the stable Windows portable executable with identical arguments', async () => {
+    let enabled = false;
+    const app = {
+      isPackaged: true,
+      getPath: () => 'C:\\Temp\\portable-extract\\VideoNinja.exe',
+      setLoginItemSettings: vi.fn((options) => {
+        enabled = options.openAtLogin;
+      }),
+      getLoginItemSettings: vi.fn(() => ({ openAtLogin: enabled })),
+    };
+    const executable = 'C:\\My Apps\\VideoNinja 1.1.0.exe';
+    const service = createStartup(app, {
+      platform: 'win32',
+      env: { PORTABLE_EXECUTABLE_FILE: executable },
+    });
+    expect(await service.isEnabled()).toBe(false);
+    expect(await service.setEnabled(true)).toBe(true);
+    expect(await service.setEnabled(false)).toBe(false);
+    for (const [options] of app.getLoginItemSettings.mock.calls)
+      expect(options).toEqual({ name: 'VideoNinja', path: executable, args: [] });
+    expect(app.setLoginItemSettings.mock.calls.map(([options]) => options)).toEqual([
+      { name: 'VideoNinja', path: executable, args: [], openAtLogin: true },
+      { name: 'VideoNinja', path: executable, args: [], openAtLogin: false },
+    ]);
+  });
+  it('uses the installed Windows executable when no portable launcher is present', async () => {
+    const executable = 'C:\\Program Files\\VideoNinja\\VideoNinja.exe';
+    const app = {
+      isPackaged: true,
+      getPath: () => executable,
+      getLoginItemSettings: vi.fn(() => ({ openAtLogin: true })),
+    };
+    expect(await createStartup(app, { platform: 'win32', env: {} }).isEnabled()).toBe(true);
+    expect(app.getLoginItemSettings).toHaveBeenCalledWith({
+      name: 'VideoNinja',
+      path: executable,
+      args: [],
+    });
+  });
+  it.each(['relative.exe', 'C:relative.exe', '\\relative.exe', '', 'C:\\bad\npath.exe'])(
+    'refuses invalid portable launcher paths instead of registering a temporary executable: %s',
+    async (executable) => {
+      const app = {
+        isPackaged: true,
+        getPath: () => 'C:\\Temp\\VideoNinja.exe',
+        setLoginItemSettings: vi.fn(),
+        getLoginItemSettings: vi.fn(),
+      };
+      const service = createStartup(app, {
+        platform: 'win32',
+        env: { PORTABLE_EXECUTABLE_FILE: executable },
+      });
+      await expect(service.isEnabled()).rejects.toThrow('absolute');
+      await expect(service.setEnabled(true)).rejects.toThrow('absolute');
+      expect(app.setLoginItemSettings).not.toHaveBeenCalled();
+      expect(app.getLoginItemSettings).not.toHaveBeenCalled();
+    },
+  );
   it('quotes Linux desktop file arguments without allowing directives', () => {
     expect(desktopQuote('/opt/My App/$test%/app')).toBe('"/opt/My App/\\\\$test%%/app"');
     expect(desktopQuote('/opt/back\\slash/"app"')).toBe('"/opt/back\\\\\\\\slash/\\\\"app\\\\""');

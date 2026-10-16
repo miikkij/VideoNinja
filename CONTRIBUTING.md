@@ -68,8 +68,9 @@ production functions with injected process, filesystem and Electron boundaries
 when a deterministic unit test is appropriate.
 
 The automated coverage includes IPC validation, process output framing and
-cancellation, tool discovery, format arguments, final file validation, queue
-races, persistence recovery, startup registration and renderer behavior. Add a
+cancellation, tool discovery, format arguments, final file validation, concurrent
+queue races, atomic batches, bounded playlist previews and selections, persistence
+recovery, startup registration and renderer behavior. Add a
 regression test for changed behavior instead of copying an implementation's
 regular expressions into a test.
 
@@ -112,14 +113,30 @@ audio fixtures, serves them only on `127.0.0.1`, and exercises metadata,
 progressive download, repeat/already-downloaded behavior, DASH stream merging,
 original audio and MP3 conversion through the real adapter. It checks final paths
 and ffprobe streams in a folder containing spaces, Unicode and a literal percent
-sign, then removes its temporary fixture tree. This validates media processing;
+sign. A generated playlist checks metadata inspection without media requests;
+parallel URL aliases must produce separate files with the same expected content
+and valid streams. The script removes its temporary fixture tree. This validates media processing;
 it does not establish current YouTube extractor or EJS compatibility.
 
 For UI, queue or lifecycle changes, also check the relevant behavior manually:
-missing-tool recovery, active pause/cancel, retry, completion and file opening,
+missing-tool recovery, per-job pause/cancel with several active jobs, raising and
+lowering concurrency, retry, completion and file opening,
 tray reopen, quit/restart, keyboard access, both languages and native startup
 registration. A source run cannot enable start at login. Use media you are
 authorized to download for an explicit live-service check.
+
+Playlist checks should cover a preview with no automatic selections, unavailable
+entries, the first-500 notice, cancellation, expired previews, selection capacity
+and a failed enqueue retaining the selection. Ordinary input accepts 100 links;
+the selected playlist may contribute up to 500 jobs within the same total queue
+limit. Both paths use one atomic, deduplicated batch. A queued job must remain a
+single media item: `--no-playlist --playlist-items 1`. Test same-URL output
+serialization and separate files for distinct URL aliases under concurrency.
+
+The concurrency setting is an integer from 1 to 5, default 1. Reducing it must
+not abort running jobs, and cancelling one job must not affect another job's
+controller. Exiting processes retain their slot/output reservation until their
+promises settle. Keep progress-only events free of persistence writes.
 
 To isolate a manual source run from your normal profile, set
 `VIDEONINJA_USER_DATA` to a new absolute directory before launching. Never

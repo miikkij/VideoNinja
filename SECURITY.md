@@ -30,6 +30,20 @@ Cancellation and shutdown wait for process-tree termination. Saved state is
 validated and migrated; malformed configuration is preserved separately rather
 than silently overwritten.
 
+Playlist inspection is a separate, bounded metadata operation. It does not
+enqueue or download media automatically. Selection requests refer to entries in
+a main-process preview cache, which expires after 15 minutes; arbitrary renderer
+URLs cannot be substituted for those entries. Unsafe, private or unavailable
+entries are disabled, and selected URLs/options are validated again before an
+atomic queue insertion. Playlist metadata is reduced to allowlisted fields and
+rendered as text. Each resulting download is constrained to one media item.
+
+Concurrency is limited to 1–5 jobs, with a separate controller for each. The same
+URL/output-directory key stays reserved through process termination. Filenames
+also distinguish quality/audio format and URL hashes to keep different aliases
+from sharing partial files. These protections do not lock files against other
+applications or processes running as the user.
+
 These boundaries reduce the authority of renderer content. They are not a
 security certification, a sandbox around yt-dlp/ffmpeg, or protection against
 another process running with the user's permissions. See
@@ -109,7 +123,7 @@ provenance or verify that yt-dlp EJS challenge scripts are installed and usable.
 Follow the [official EJS instructions](https://github.com/yt-dlp/yt-dlp/wiki/EJS)
 for that setup.
 
-Downloading or previewing a link contacts the source service through yt-dlp.
+Downloading or previewing a video or playlist contacts the source service through yt-dlp.
 URLs, authentication choices and network options affect what that service sees.
 Download only content you are authorized to save; the application does not
 grant access to restricted accounts or content.

@@ -41,11 +41,33 @@ function createStartup(
       : path.join(app.getPath('home'), '.config');
   const desktopFile = path.join(configRoot, 'autostart', 'videoninja.desktop');
   const executable = env.APPIMAGE || app.getPath('exe');
+  const loginOptions = () => {
+    const options = { name: 'VideoNinja' };
+    if (platform === 'win32') {
+      const portablePath = env.PORTABLE_EXECUTABLE_FILE;
+      if (
+        portablePath !== undefined &&
+        (typeof portablePath !== 'string' ||
+          !path.win32.isAbsolute(portablePath) ||
+          path.win32.parse(portablePath).root.length < 3 ||
+          portablePath.includes('"') ||
+          [...portablePath].some(
+            (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+          ))
+      ) {
+        throw new Error('The portable application requires an absolute executable path.');
+      }
+      // The portable app's process executable lives in a temporary extraction folder.
+      options.path = portablePath || app.getPath('exe');
+      options.args = [];
+    }
+    return options;
+  };
   return {
     async isEnabled() {
       if (!app.isPackaged) return false;
       if (platform !== 'linux')
-        return Boolean(app.getLoginItemSettings({ name: 'VideoNinja' }).openAtLogin);
+        return Boolean(app.getLoginItemSettings(loginOptions()).openAtLogin);
       try {
         const entry = desktopEntry(await filesystem.readFile(desktopFile, 'utf8'));
         return (
@@ -63,12 +85,13 @@ function createStartup(
     async setEnabled(enabled) {
       if (!app.isPackaged) throw new Error('Start at login requires an installed application.');
       if (platform !== 'linux') {
+        const options = loginOptions();
         app.setLoginItemSettings({
-          name: 'VideoNinja',
-          openAtLogin: enabled,
           path: app.getPath('exe'),
+          ...options,
+          openAtLogin: enabled,
         });
-        const actual = Boolean(app.getLoginItemSettings({ name: 'VideoNinja' }).openAtLogin);
+        const actual = Boolean(app.getLoginItemSettings(options).openAtLogin);
         if (actual !== enabled)
           throw new Error('The operating system did not change start at login.');
         return actual;

@@ -12,7 +12,7 @@ flowchart LR
     MAIN -->|State and progress events| PRE
     PRE --> UI
     MAIN <--> STORE["Validated local config.json"]
-    MAIN --> QUEUE["Sequential DownloadQueue"]
+    MAIN --> QUEUE["DownloadQueue: 1 to 5 active jobs"]
     QUEUE --> ADAPTER["yt-dlp adapter"]
     ADAPTER --> RUNNER["Process runner: shell disabled"]
     RUNNER --> YTDLP["External yt-dlp"]
@@ -22,7 +22,7 @@ flowchart LR
 
 There is no application backend, remote database or frontend build step. A
 restricted custom protocol serves packaged renderer resources. Downloads and
-metadata previews access source services through external yt-dlp.
+video/playlist metadata previews access source services through external yt-dlp.
 
 | Module                                                   | Responsibility                                                                                          |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -55,8 +55,8 @@ Disk space is refreshed when the folder changes and every 30 seconds.
 
 Closing the window hides it when a tray exists. Without a tray, normal window
 closing can quit the application. Quit stops polling, aborts outstanding metadata
-previews and the active download, waits for the child processes to settle, and
-checkpoints the queue before exit. An interrupted active job is saved as pending;
+and playlist previews plus every active download, waits for all child processes
+to settle, and checkpoints the queue before exit. Interrupted active jobs are saved as pending;
 partial media is retained for a later continuation attempt.
 
 Startup registration is available only for packaged applications. Windows/macOS
@@ -88,20 +88,41 @@ stateDiagram-v2
     downloading --> pending: Shutdown checkpoint
 ```
 
-Only one downloader runs at a time. An `AbortController` is passed to the adapter
-as `downloadVideo(url, outputPath, options, callback, { signal })`. Cancellation
-records one terminal transition and waits for process settlement before the next
-job starts; a late completion callback cannot overwrite cancellation. Pause keeps
-the same job and its partial files. A retry of a failed/cancelled history entry
-creates a new job. Pending and paused jobs can be reordered around the active job.
+`settings.maxConcurrent` selects 1–5 active downloaders, defaulting to 1. Increasing
+the limit immediately fills available slots. Lowering it does not abort active
+jobs; new jobs wait until the active count is below the new limit. Startup applies
+the saved limit before scheduling restored jobs.
+
+An active-job map holds a distinct `AbortController` and promise for each job.
+The adapter receives `downloadVideo(url, outputPath, options, callback, { signal })`.
+Cancellation records one terminal transition and reserves that slot until the
+process settles; a late completion cannot overwrite it. Other active jobs keep
+running. Pause keeps the same job and its partial files, and resume cannot overlap
+the old attempt. A retry of a failed/cancelled history entry creates a new job.
+Pending and paused jobs can be reordered around active jobs.
+
+The scheduler serializes jobs with the same URL and resolved output directory,
+ignoring the URL fragment but retaining its query. Windows output paths are
+case-folded for that key. A cancelling/pausing child retains the key until it exits;
+unrelated URLs can use other slots. The adapter also reserves canonical
+directory/normalized-URL pairs within this application instance. These locks do
+not coordinate with another application writing to the same folder.
+
+`getQueueState()` exposes `activeIds` and `maxConcurrent`. Aborting children remain
+in `activeIds` until settled. The legacy `currentDownload` is the first active job,
+and `isProcessing` means at least one active attempt remains. To restore without
+starting at the default limit, use `loadState(state, { start: false })`,
+`setConcurrency(limit, { start: false })`, then `processNext()`.
 
 The durable status is `pending`, `downloading`, `paused`, `completed`, `failed`
 or `cancelled`. Progress also carries a phase such as `preparing`, `downloading`
-or `merging`, plus numeric percent, speed and ETA when available. Missing progress
-data stays unknown rather than being fabricated.
+or `merging`, plus percent, speed and ETA from the adapter.
 
-The queue is capped at 500 jobs and history at 100 entries. Batch submission
-accepts at most 100 URLs and validates the batch before adding it. History can be
+The queue is capped at 500 jobs and history at 100 entries. Ordinary batch input
+accepts at most 100 URLs. A playlist selection may supply up to 500 entries within
+the same remaining capacity. `addBatch(urls, outputPath, options)` validates and
+deduplicates the complete batch before one append and notification, then schedules
+available slots. Its return value contains the accepted job IDs. History can be
 searched, cleared after native confirmation, or exported through a save dialog.
 Clearing history does not remove media. Export strips credentials, URL query and
 fragment, local paths, errors and authentication/network options; titles and URL
@@ -109,7 +130,30 @@ paths can still be private.
 
 `queue-updated` reports durable changes. `download-progress` reports transient
 progress separately, so ordinary progress updates do not write the complete
-configuration to disk. Metadata and state transitions trigger durable snapshots.
+configuration to disk. State transitions checkpoint the latest snapshot,
+including any metadata received since the previous checkpoint.
+
+## Playlist inspection and selection
+
+Playlist inspection is explicit and separate from adding individual links. The
+renderer sends the first input URL to `previewPlaylist`; yt-dlp uses flat playlist
+metadata mode with media downloading disabled. It fetches at most 501 entries to
+detect truncation, exposes only the first 500, and reports `hasMore` for the UI
+notice. Entries contain bounded identity, title, URL, duration and availability
+fields. Nested playlists, private/unavailable entries and invalid URLs cannot be
+selected. Raw extractor JSON does not cross the bridge.
+
+The main process keeps one preview in memory with a generated `previewId` and a
+15-minute expiry. A newer preview, cancellation, successful enqueue or shutdown
+invalidates it. `addPlaylistSelection` accepts that ID and entry indices; main
+resolves the URLs from its cache, revalidates options/folder/capacity and calls
+the atomic batch API. Previewing alone never adds jobs. The dialog starts with
+no selections, disables unavailable entries and preserves selections if enqueue
+fails. Preview data is not restored after an application restart.
+
+Each selected URL becomes a normal independently controlled job. Actual downloads
+and single-video previews pass `--no-playlist --playlist-items 1`, so a queued
+playlist URL cannot unexpectedly expand into every item.
 
 ## Persistence and recovery
 
@@ -126,7 +170,9 @@ chosen destination folder.
 
 Unversioned legacy data is migrated. Invalid options, duplicate IDs, malformed
 entries and unsupported future queue schemas are rejected with recovery warnings.
-Interrupted downloading/merging states become pending. Saved error strings are
+Interrupted downloading/merging states become pending. The additive
+`settings.maxConcurrent` field accepts only integers 1–5; missing/invalid values
+restore as 1. Saved error strings are
 redacted and bounded to 2,000 characters.
 
 Before store initialization, malformed JSON or a non-object root is moved to a
@@ -147,8 +193,9 @@ resources and denies renderer network connections. The `videoninja://app/`
 protocol exposes an explicit resource map, not arbitrary files. Navigation,
 new windows and webviews are denied.
 
-The renderer receives named methods such as `addDownloads`, `pauseDownload`,
-`retryDownload` and `openFile`; it receives no generic IPC send/invoke capability.
+The renderer receives named methods such as `addDownloads`, `previewPlaylist`,
+`addPlaylistSelection`, `pauseDownload`, `retryDownload` and `openFile`; it receives
+no generic IPC send/invoke capability.
 Main-process handlers check the originating window, main frame, application URL
 and command payload. Replies use `{ ok, data }` or a bounded public error object.
 Untrusted titles, URLs and error text are rendered as text.
@@ -183,8 +230,11 @@ cookies.
 
 Machine-readable progress and metadata are decoded across process chunk
 boundaries. Completion uses yt-dlp's `after_move` path, then verifies that the
-file exists inside the destination. Filenames include a stable extractor/video
-ID, and quality selectors enforce the requested height ceiling. Audio-only
+file exists inside the destination. Filenames include the title, extractor/video
+ID, quality/audio format and the first 16 hexadecimal SHA-256 characters of the
+normalized input URL. The same URL/options retain a repeatable path; distinct URL
+aliases and quality choices get separate names. This does not rename files saved
+with older filename templates. Quality selectors enforce the requested height ceiling. Audio-only
 selects an audio stream; optional conversion uses ffmpeg. Subprocess output and
 errors are bounded. Cancellation terminates the process tree and waits for exit.
 
@@ -204,6 +254,7 @@ CI is configured to run checks, source smoke, full native packaging, packaged
 smoke and artifact validation on all three operating systems. A further
 GitHub-hosted-only check exercises the app from a Windows NSIS installation,
 read-only macOS DMG mount or extracted Linux Debian package. The media smoke
-uses real tools with generated local fixtures and is a separate explicit check.
+uses real tools with generated local fixtures, including playlist inspection and
+parallel URL aliases, and is a separate explicit check.
 Workflow configuration is not proof of a passing run; see
 [Contributing](../CONTRIBUTING.md) for commands and release validation.

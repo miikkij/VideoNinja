@@ -22,9 +22,39 @@ Jos muutit PATH-ympäristömuuttujaa, käynnistä sovellus uudelleen.
 4. Lisää linkit jonoon painikkeella tai Enterillä. Shift+Enter lisää rivinvaihdon.
 5. Hallitse töitä tauotus-, jatkamis-, perumis- ja siirtopainikkeilla.
 
-Lataukset käsitellään yksi kerrallaan. Korkeusvalinta on enimmäisraja.
+Oletuksena ladataan yksi työ kerrallaan. Valitse asetuksista
+**Samanaikaisten latausten enimmäismäärä**, 1–5. Määrän kasvattaminen käynnistää
+odottavia töitä. Pienentäminen antaa käynnissä olevien töiden valmistua ensin.
+Samaan URL-osoitteeseen ja kansioon kohdistuvat työt odottavat toisiaan.
+Rinnakkaiset lataukset jakavat verkkoyhteyden, ja lähdesivusto voi rajoittaa niitä.
+
+Tavallinen erä hyväksyy enintään 100 linkkiä. Saman erän toistuvat linkit lisätään
+vain kerran, ja jonossa voi olla yhteensä enintään 500 työtä.
+Korkeusvalinta on enimmäisraja.
 Ääni ja kuva yhdistetään tarvittaessa ffmpegillä. Tauolta jatkaminen riippuu
-palvelimen ja yt-dlp:n tuesta. Peruminen ei poista osittaisia tiedostoja.
+palvelimen ja yt-dlp:n tuesta. Peruminen ei poista osittaisia tiedostoja eikä
+keskeytä muita aktiivisia latauksia.
+
+## Videot soittolistalta
+
+1. Liitä soittolistan URL ensimmäiseksi linkiksi.
+2. Valitse laatu ja mahdollinen äänimuunnos päälomakkeesta.
+3. Paina **Valitse soittolistalta**. Esikatselu hakee metatiedot, ei mediatiedostoja.
+4. Valitse haluamasi videot tai **Valitse kaikki saatavilla olevat**. Aluksi mitään ei ole valittu.
+5. Paina **Lisää valitut jonoon**.
+
+Yksityisiä, poistettuja tai muuten saavuttamattomia kohteita ei voi valita.
+Esikatselu näyttää enintään ensimmäiset 500 kohdetta ja ilmoittaa, jos niitä on
+lisää. Myöhempiä kohteita varten käytä pienempää soittolistaa tai yksittäisiä
+videolinkkejä. Valittujen töiden pitää mahtua jonon jäljellä olevaan kapasiteettiin.
+Saman valinnan toistuvat linkit lisätään vain kerran.
+
+Esikatselu vanhenee 15 minuutissa. Sulje ja avaa se uudelleen tarvittaessa.
+Sulkeminen peruuttaa keskeneräisen esikatselun. Jos jonoon lisäys epäonnistuu,
+valinnat säilyvät ja virhe jää näkyviin. Tavallinen **Lisää jonoon** käsittelee
+yksittäisiä töitä; koko soittolista ei käynnisty vahingossa.
+
+## Historia
 
 Historia tarjoaa haun, uusintayrityksen, tiedoston avaamisen ja kansion näyttämisen.
 Viennistä jätetään pois paikalliset polut, kirjautumisasetukset ja virheet.

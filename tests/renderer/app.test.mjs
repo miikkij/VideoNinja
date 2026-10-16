@@ -60,6 +60,9 @@ async function boot(overrides = {}) {
     'clearHistory',
     'exportHistory',
     'previewDownload',
+    'previewPlaylist',
+    'cancelPlaylistPreview',
+    'addPlaylistSelection',
     'openExternal',
   ])
     api[method] = vi.fn(async () => ok(null));
@@ -479,5 +482,144 @@ describe('production renderer', () => {
     events.onWarnings(['<img src=x onerror=bad()>']);
     expect($('warnings-message').textContent).toBe('<img src=x onerror=bad()>');
     expect($('warnings').querySelector('img')).toBeNull();
+  });
+
+  it('loads and persists a user-selected concurrency limit', async () => {
+    const { api } = await boot({
+      settings: { downloadPath: '/downloads', language: 'fi', maxConcurrent: 3 },
+    });
+    expect($('max-concurrent').value).toBe('3');
+    expect(document.querySelector('label[for="max-concurrent"]').textContent).toContain(
+      'Samanaikaisten',
+    );
+    $('max-concurrent').value = '5';
+    $('max-concurrent').dispatchEvent(new Event('change'));
+    await vi.waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ maxConcurrent: 5 })),
+    );
+  });
+
+  it('previews a playlist without downloading and enqueues only explicitly selected available entries', async () => {
+    const { api } = await boot();
+    $('video-urls').value = 'https://example.com/playlist\nnot-a-url';
+    api.previewPlaylist.mockResolvedValue(
+      ok({
+        previewId: 'preview-1',
+        title: '<img src=x>',
+        maxEntries: 500,
+        hasMore: false,
+        entries: [
+          {
+            index: 1,
+            title: 'First',
+            url: 'https://example.com/one',
+            duration: 42,
+            available: true,
+          },
+          { index: 2, title: 'Private', url: null, duration: null, available: false },
+          {
+            index: 3,
+            title: '<script>bad()</script>',
+            url: 'https://example.com/three',
+            duration: 90,
+            available: true,
+          },
+        ],
+      }),
+    );
+    $('playlist-preview-button').click();
+    await vi.waitFor(() => expect($('playlist-list').children.length).toBe(3));
+    expect(api.previewPlaylist).toHaveBeenCalledWith({
+      url: 'https://example.com/playlist',
+      options: { quality: 'best' },
+    });
+    expect(api.addDownloads).not.toHaveBeenCalled();
+    expect(api.addPlaylistSelection).not.toHaveBeenCalled();
+    expect($('playlist-add-selected').disabled).toBe(true);
+    expect($('playlist-dialog').querySelector('img, script')).toBeNull();
+    expect(document.querySelector('#playlist-list input[data-index="2"]').disabled).toBe(true);
+    $('playlist-select-all').click();
+    expect($('playlist-status').textContent).toContain('2 of 2');
+    $('playlist-clear-selection').click();
+    expect($('playlist-add-selected').disabled).toBe(true);
+    const selected = document.querySelector('#playlist-list input[data-index="3"]');
+    selected.checked = true;
+    selected.dispatchEvent(new Event('change', { bubbles: true }));
+    api.addPlaylistSelection.mockResolvedValue(ok(['new-job']));
+    $('playlist-add-selected').click();
+    await vi.waitFor(() =>
+      expect(api.addPlaylistSelection).toHaveBeenCalledWith({
+        previewId: 'preview-1',
+        indices: [3],
+        options: { quality: 'best' },
+      }),
+    );
+    await vi.waitFor(() => expect($('playlist-dialog').open).toBe(false));
+    expect(api.cancelPlaylistPreview).not.toHaveBeenCalled();
+    expect($('notice-message').textContent).toContain('1');
+    expect(document.activeElement).toBe($('playlist-preview-button'));
+  });
+
+  it('cancels playlist inspection and discards a late response without downloading', async () => {
+    const { api } = await boot();
+    let resolvePreview;
+    api.previewPlaylist.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePreview = resolve;
+        }),
+    );
+    $('video-urls').value = 'https://example.com/playlist';
+    $('playlist-preview-button').click();
+    expect($('playlist-dialog').open).toBe(true);
+    expect($('playlist-status').textContent).toContain('Reading');
+    $('playlist-close').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    expect($('playlist-dialog').open).toBe(false);
+    expect(api.cancelPlaylistPreview).toHaveBeenCalledOnce();
+    resolvePreview(
+      ok({
+        previewId: 'late',
+        entries: [
+          { index: 1, title: 'Late result', url: 'https://example.com/one', available: true },
+        ],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect($('playlist-list').children.length).toBe(0);
+    expect($('playlist-dialog').open).toBe(false);
+    expect(api.addPlaylistSelection).not.toHaveBeenCalled();
+  });
+
+  it('bounds playlist rendering and keeps rejected selections visible with a localized error', async () => {
+    const { api } = await boot({ settings: { downloadPath: '/downloads', language: 'fi' } });
+    api.previewPlaylist.mockResolvedValue(
+      ok({
+        previewId: 'large',
+        maxEntries: 500,
+        hasMore: true,
+        entries: Array.from({ length: 501 }, (_, index) => ({
+          index: index + 1,
+          title: `Video ${index + 1}`,
+          url: `https://example.com/${index}`,
+          available: true,
+        })),
+      }),
+    );
+    $('video-urls').value = 'https://example.com/playlist';
+    $('playlist-preview-button').click();
+    await vi.waitFor(() => expect($('playlist-list').children.length).toBe(500));
+    expect($('playlist-limit').hidden).toBe(false);
+    expect($('playlist-limit').textContent).toContain('500');
+    $('playlist-select-all').click();
+    api.addPlaylistSelection.mockResolvedValue({ ok: false, error: { code: 'QUEUE_FULL' } });
+    $('playlist-add-selected').click();
+    await vi.waitFor(() =>
+      expect($('playlist-error').textContent).toContain('Latausjono on täynnä'),
+    );
+    expect($('playlist-dialog').open).toBe(true);
+    expect($('playlist-list').querySelectorAll('input:checked').length).toBe(500);
+    expect($('playlist-add-selected').disabled).toBe(false);
   });
 });

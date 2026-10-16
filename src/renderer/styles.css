@@ -495,6 +495,48 @@ dialog::backdrop {
   gap: 0.6rem;
   margin-top: 1.2rem;
 }
+.playlist-title {
+  margin-top: 1rem;
+  overflow-wrap: anywhere;
+}
+.playlist-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.playlist-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 45vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-block: 1px solid var(--line);
+}
+.playlist-entry {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.8rem 0.3rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+}
+.playlist-entry input {
+  margin-top: 0.2rem;
+}
+.playlist-entry span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.playlist-entry strong,
+.playlist-entry small {
+  display: block;
+}
+.playlist-entry:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
+}
 .sr-only {
   position: absolute;
   width: 1px;

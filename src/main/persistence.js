@@ -6,6 +6,7 @@ const { normalizeOptions, validateUrl } = require('./downloadOptions');
 const SCHEMA_VERSION = 1;
 const MAX_QUEUE_ITEMS = 500;
 const MAX_HISTORY_ITEMS = 100;
+const MAX_CONCURRENT_DOWNLOADS = 5;
 const MAX_ERROR_LENGTH = 2000;
 const MAX_CONFIG_BYTES = 10 * 1024 * 1024;
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
@@ -71,7 +72,14 @@ function sanitizeSettings(raw) {
     language: 'en',
     quality: 'best',
     jsRuntime: 'auto',
+    maxConcurrent: 1,
   };
+  if (
+    Number.isInteger(input.maxConcurrent) &&
+    input.maxConcurrent >= 1 &&
+    input.maxConcurrent <= MAX_CONCURRENT_DOWNLOADS
+  )
+    result.maxConcurrent = input.maxConcurrent;
   if (isAbsoluteFilePath(input.downloadPath)) result.downloadPath = input.downloadPath;
   if (isAbsoluteFilePath(input.cookieFilePath)) result.cookieFilePath = input.cookieFilePath;
   if (['en', 'fi'].includes(input.language)) result.language = input.language;
@@ -295,6 +303,7 @@ module.exports = {
   SCHEMA_VERSION,
   MAX_QUEUE_ITEMS,
   MAX_HISTORY_ITEMS,
+  MAX_CONCURRENT_DOWNLOADS,
   MAX_ERROR_LENGTH,
   isAbsoluteFilePath,
   redactErrorText,

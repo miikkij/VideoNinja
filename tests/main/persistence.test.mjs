@@ -104,10 +104,23 @@ describe('saved state validation and migration', () => {
       language: 'fi',
       quality: '720',
       jsRuntime: 'auto',
+      maxConcurrent: 1,
       extraArgs: '--retries 3',
       userAgent: 'agent',
     });
     expect(sanitizeSettings({ extraArgs: '--exec calc.exe' }).extraArgs).toBeUndefined();
+  });
+
+  it('defaults legacy/corrupt concurrency to one and preserves only integers from one to five', () => {
+    expect(sanitizeSettings({}).maxConcurrent).toBe(1);
+    for (const maxConcurrent of [undefined, null, '3', 0, 6, -1, 2.5, NaN, Infinity])
+      expect(sanitizeSettings({ maxConcurrent }).maxConcurrent).toBe(1);
+    for (const maxConcurrent of [1, 2, 3, 4, 5])
+      expect(sanitizeSettings({ maxConcurrent }).maxConcurrent).toBe(maxConcurrent);
+    expect(
+      loadPersistedState({ get: (key) => (key === 'settings' ? { maxConcurrent: 4 } : undefined) })
+        .settings.maxConcurrent,
+    ).toBe(4);
   });
 
   it('accepts reasonable bounds and discards malformed/off-the-chart geometry', () => {

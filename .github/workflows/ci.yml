@@ -88,3 +88,17 @@ jobs:
       - name: Smoke test native package on Windows and macOS
         if: runner.os != 'Linux'
         run: node scripts/installer-smoke.mjs
+
+      - name: Upload verified packages and screenshots
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-${{ matrix.os }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            test-results/*.png

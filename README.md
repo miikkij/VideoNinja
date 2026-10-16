@@ -24,7 +24,8 @@ for published binaries; a source version bump does not publish a release.
 
 - English and Finnish interface, selectable in the header and saved between launches.
 - Paste up to 100 HTTP(S) links at once, one per line. Enter submits; Shift+Enter adds a line.
-- One active download, with pause, resume, cancellation and queue reordering.
+- Choose 1–5 simultaneous downloads, with pause, resume, cancellation and queue reordering.
+- Preview a playlist and select which of its first 500 entries to add.
 - Best available, 2160p, 1440p, 1080p, 720p and 480p quality limits.
 - Audio-only download in the original format or conversion to MP3, M4A, Opus or WAV.
 - Optional metadata preview before downloading.
@@ -37,7 +38,16 @@ for published binaries; a source version bump does not publish a release.
 The queue holds up to 500 jobs and history keeps the latest 100 entries.
 Paused jobs remain paused after restart; interrupted active jobs return to the queue.
 Resume depends on the source server and yt-dlp's continuation support.
-Playlists and simultaneous downloads are not enabled.
+The default is one simultaneous download. Change **Maximum simultaneous downloads**
+in Settings; reducing it lets active jobs finish before enforcing the lower limit.
+Duplicate URLs in one submitted batch are added once. Repeated jobs for the same
+URL and destination run sequentially even when other downloads run in parallel.
+
+Use **Choose from playlist** to inspect the first pasted link, select available
+videos and choose **Add selected to queue**. Previewing fetches metadata without
+downloading media files or adding jobs. Unavailable entries cannot be selected.
+The preview expires after 15 minutes and shows a notice when the playlist extends
+beyond the first 500 entries. Ordinary **Add to queue** never expands a whole playlist.
 
 ## Download tools
 
@@ -50,7 +60,8 @@ Install these separately; VideoNinja does not bundle or silently install them.
 | [JavaScript runtime and EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS) | Required for full YouTube support.                         |
 
 Tools are discovered beside the executable, on PATH and in common platform
-installation folders. Settings shows the resolved paths and versions.
+installation folders. Settings shows yt-dlp and ffmpeg paths and versions,
+plus detected runtime versions.
 Automatic runtime selection prefers Deno 2.3+ and then Node.js 22+; QuickJS is also
 supported. Electron's internal Node runtime is not a standalone yt-dlp runtime.
 A successful version check does not verify that matching EJS scripts are installed.

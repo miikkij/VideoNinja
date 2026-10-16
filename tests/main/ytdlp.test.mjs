@@ -57,10 +57,12 @@ describe('production argument builder', () => {
     expect(args).toContain('--ignore-config');
     expect(args).toContain('--no-plugin-dirs');
     expect(args).toContain('--no-remote-components');
+    expect(args).toContain('--no-playlist');
+    expect(args[args.indexOf('--playlist-items') + 1]).toBe('1');
     expect(args[args.indexOf('--user-agent') + 1]).toBe('Example Agent "quoted"');
     expect(args[args.indexOf('--ffmpeg-location') + 1]).toBe(ffmpeg.path);
     expect(args[args.indexOf('--js-runtimes') + 1]).toBe(`deno:${yt.jsRuntimes[0].path}`);
-    expect(args[args.indexOf('-o') + 1]).toContain('%(extractor_key)s-%(id)s');
+    expect(args[args.indexOf('-o') + 1]).toContain('%(extractor_key).24B-%(id).40B');
     expect(args[args.indexOf('-f') + 1]).toBe(
       'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
     );
@@ -94,6 +96,31 @@ describe('production argument builder', () => {
     expect(() =>
       buildDownloadArgs('https://example.com/', root, { jsRuntime: 'node' }, yt, ffmpeg),
     ).toThrow(/missing or unsupported/u);
+  });
+  it('isolates aliases and requested formats while keeping same-input filenames stable', () => {
+    const template = (url, options = {}) => {
+      const args = buildDownloadArgs(url, root, options, yt, ffmpeg);
+      return args[args.indexOf('-o') + 1];
+    };
+    const first = template('https://example.com/watch?alias=a');
+    expect(first).toBe(template('https://EXAMPLE.COM/watch?alias=a'));
+    expect(first).not.toBe(template('https://example.com/watch?alias=b'));
+    expect(first).not.toBe(template('https://example.com/watch?alias=a', { quality: '720' }));
+    expect(first).toMatch(/\[best-[a-f0-9]{16}\]/u);
+    expect(template('https://example.com/', { quality: 'audio', audioFormat: 'mp3' })).toMatch(
+      /\[audio-mp3-[a-f0-9]{16}\]/u,
+    );
+    const longest = path.basename(
+      template('https://example.com/', { quality: 'audio', audioFormat: 'original' }),
+    );
+    expect(longest).toContain('%(title).140B');
+    expect(longest).toContain('%(extractor_key).24B-%(id).40B');
+    const expanded = longest
+      .replace('%(title).140B', 't'.repeat(140))
+      .replace('%(extractor_key).24B', 'e'.repeat(24))
+      .replace('%(id).40B', 'i'.repeat(40))
+      .replace('%(ext)s', 'webm');
+    expect(Buffer.byteLength(expanded)).toBeLessThanOrEqual(255);
   });
 });
 
@@ -194,6 +221,65 @@ describe('download result protocol', () => {
     expect(tools.checkYtDlpAvailability).not.toHaveBeenCalled();
     expect(runProcess).not.toHaveBeenCalled();
   });
+  it('serializes canonical-folder aliases and removes cancelled duplicate writers', async () => {
+    const folderAlias = path.resolve('folder-alias');
+    let finishFirst;
+    let count = 0;
+    const { service, runProcess } = setup(
+      async (_file, _args, handlers) => {
+        count++;
+        if (count === 1)
+          await new Promise((resolve) => {
+            finishFirst = resolve;
+          });
+        handlers.onStdoutLine(`${PROTOCOL.file}${JSON.stringify(finalFile)}`);
+        return { code: 0 };
+      },
+      {
+        realpath: async (filename) => (filename === folderAlias ? root : filename),
+      },
+    );
+    const first = service.downloadVideo('https://example.com/video', root);
+    await vi.waitFor(() => expect(runProcess).toHaveBeenCalledTimes(1));
+    const controller = new AbortController();
+    const cancelled = service.downloadVideo(
+      'https://EXAMPLE.COM/video',
+      folderAlias,
+      { quality: '720' },
+      null,
+      { signal: controller.signal },
+    );
+    const checkCancelled = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    const next = service.downloadVideo('https://example.com/video', folderAlias, {
+      quality: '1080',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(runProcess).toHaveBeenCalledTimes(1);
+    controller.abort();
+    await checkCancelled;
+    finishFirst();
+    expect((await first).success).toBe(true);
+    expect((await next).success).toBe(true);
+    expect(runProcess).toHaveBeenCalledTimes(2);
+    expect(runProcess.mock.calls[1][1]).toContain(
+      'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
+    );
+  });
+  it('allows different URL writers to run concurrently in the same folder', async () => {
+    const releases = [];
+    const { service, runProcess } = setup(async (_file, _args, handlers) => {
+      await new Promise((resolve) => releases.push(resolve));
+      handlers.onStdoutLine(`${PROTOCOL.file}${JSON.stringify(finalFile)}`);
+      return { code: 0 };
+    });
+    const pending = [
+      service.downloadVideo('https://example.com/video?alias=one', root),
+      service.downloadVideo('https://example.com/video?alias=two', root),
+    ];
+    await vi.waitFor(() => expect(runProcess).toHaveBeenCalledTimes(2));
+    releases.forEach((release) => release());
+    expect((await Promise.all(pending)).every((result) => result.success)).toBe(true);
+  });
 });
 
 describe('metadata and disk space', () => {
@@ -212,6 +298,10 @@ describe('metadata and disk space', () => {
     });
     expect(runProcess.mock.calls[0][1]).toContain('--simulate');
     expect(runProcess.mock.calls[0][1]).toContain('--skip-download');
+    expect(runProcess.mock.calls[0][1]).toContain('--no-playlist');
+    expect(
+      runProcess.mock.calls[0][1][runProcess.mock.calls[0][1].indexOf('--playlist-items') + 1],
+    ).toBe('1');
   });
   it('uses available blocks for free space and reports unknown on filesystem errors', async () => {
     const { service, fileSystem } = setup();
@@ -236,5 +326,205 @@ describe('metadata and disk space', () => {
     expect(formatBytes(null)).toBe('Unknown');
     expect(formatBytes(NaN)).toBe('Unknown');
     expect(redactError('see https://example.com/?token=x')).not.toContain('token');
+  });
+});
+
+describe('bounded playlist preview', () => {
+  const entry = (index, overrides = {}) => ({
+    id: `item-${index}`,
+    title: `Video ${index}`,
+    playlist_index: index,
+    url: `https://media.example/video/${index}`,
+    duration: index * 10,
+    ...overrides,
+  });
+  const preview = (entries, extra = {}) => ({
+    type: 'playlist',
+    title: 'Owned list',
+    entries,
+    ...extra,
+  });
+  function playlistService(value) {
+    return setup(async (_file, _args, handlers) => {
+      handlers.onStdoutLine(`${PROTOCOL.playlist}${JSON.stringify(value)}`);
+      return { code: 0 };
+    });
+  }
+  it('uses safe flat no-download flags, cookie/runtime policy and a bounded runner', async () => {
+    const { service, runProcess } = playlistService(preview([entry(1)]));
+    const controller = new AbortController();
+    const cookieFile = path.resolve('private/cookies.txt');
+    const result = await service.fetchPlaylist(
+      'https://example.com/list?a=1&b=2',
+      { cookieFile, userAgent: 'Owned Agent', jsRuntime: 'deno' },
+      { signal: controller.signal },
+    );
+    expect(result).toEqual({
+      title: 'Owned list',
+      entries: [
+        {
+          id: 'item-1',
+          index: 1,
+          title: 'Video 1',
+          url: 'https://media.example/video/1',
+          duration: 10,
+          available: true,
+        },
+      ],
+      hasMore: false,
+    });
+    const args = runProcess.mock.calls[0][1];
+    expect(args).toEqual(
+      expect.arrayContaining([
+        '--ignore-config',
+        '--no-plugin-dirs',
+        '--no-remote-components',
+        '--yes-playlist',
+        '--flat-playlist',
+        '--simulate',
+        '--skip-download',
+        '--cookies',
+        cookieFile,
+        '--user-agent',
+        'Owned Agent',
+        '--js-runtimes',
+        `deno:${yt.jsRuntimes[0].path}`,
+      ]),
+    );
+    expect(args).not.toContain('--no-playlist');
+    expect(args).not.toContain('--playlist-items');
+    expect(args[args.indexOf('--playlist-end') + 1]).toBe('501');
+    expect(args.slice(-2)).toEqual(['--', 'https://example.com/list?a=1&b=2']);
+    expect(runProcess.mock.calls[0][2]).toMatchObject({
+      signal: controller.signal,
+      timeoutMs: 60000,
+      maxOutputBytes: 8 * 1024 * 1024,
+    });
+  });
+  it('retains unavailable rows, validates every URL and converts only known YouTube IDs', async () => {
+    const { service } = playlistService(
+      preview([
+        entry(1, { url: 'http://cdn.other.example/video.mp4' }),
+        entry(2, { url: 'abcdefghijk', ie_key: 'Youtube' }),
+        entry(3, { url: 'abcdefghijk', ie_key: 'Unknown' }),
+        entry(4, { url: 'file:///private/video.mp4', webpage_url: 'https://example.com/list' }),
+        entry(5, { url: 'https://user:secret@example.com/video' }),
+        entry(6, { availability: 'private' }),
+        entry(7, { title: '[Deleted video]' }),
+        null,
+        entry(9, { _type: 'playlist' }),
+      ]),
+    );
+    const result = await service.fetchPlaylist('https://example.com/list');
+    expect(result.entries.map((item) => item.available)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(result.entries[0].url).toBe('http://cdn.other.example/video.mp4');
+    expect(result.entries[1].url).toBe('https://www.youtube.com/watch?v=abcdefghijk');
+    expect(result.entries.slice(2).every((item) => item.url === null)).toBe(true);
+    expect(result.entries[7]).toMatchObject({ id: 'entry-8', index: 8, duration: null });
+  });
+  it('returns at most 500 entries and detects the 501st sentinel', async () => {
+    for (const count of [500, 501]) {
+      const { service } = playlistService(
+        preview(Array.from({ length: count }, (_, index) => entry(index + 1))),
+      );
+      const result = await service.fetchPlaylist('https://example.com/list');
+      expect(result.entries).toHaveLength(500);
+      expect(result.hasMore).toBe(count === 501);
+      expect(result.entries.at(-1).index).toBe(500);
+    }
+  });
+  it('bounds display fields and strips all unrequested remote metadata', async () => {
+    const { service } = playlistService(
+      preview(
+        [
+          entry(1, {
+            id: 'a'.repeat(300),
+            title: 'x'.repeat(600),
+            duration: -1,
+            thumbnail: 'https://remote.example/tracker',
+            formats: [{ url: 'https://secret' }],
+          }),
+        ],
+        { title: 't'.repeat(600), arbitrary: 'unused' },
+      ),
+    );
+    const result = await service.fetchPlaylist('https://example.com/list');
+    expect(result.title).toHaveLength(500);
+    expect(result.entries[0].title).toHaveLength(500);
+    expect(result.entries[0].id).toHaveLength(200);
+    expect(result.entries[0].duration).toBeNull();
+    expect(Object.keys(result.entries[0]).sort()).toEqual([
+      'available',
+      'duration',
+      'id',
+      'index',
+      'title',
+      'url',
+    ]);
+    expect(result).not.toHaveProperty('arbitrary');
+  });
+  it.each(['nonplaylist', 'malformed', 'oversized', 'excess-entries', 'nested'])(
+    'rejects invalid playlist output: %s',
+    async (mode) => {
+      const { service } = setup(async (_file, _args, handlers) => {
+        let output = JSON.stringify(preview([entry(1)]));
+        if (mode === 'nonplaylist') output = JSON.stringify({ type: 'video', entries: [] });
+        if (mode === 'malformed') output = '{invalid';
+        if (mode === 'oversized') output = 'x'.repeat(8 * 1024 * 1024 + 1);
+        if (mode === 'excess-entries')
+          output = JSON.stringify(
+            preview(Array.from({ length: 502 }, (_, index) => entry(index + 1))),
+          );
+        handlers.onStdoutLine(`${PROTOCOL.playlist}${output}`);
+        if (mode === 'nested') handlers.onStdoutLine(`${PROTOCOL.playlist}${output}`);
+        return { code: 0 };
+      });
+      await expect(service.fetchPlaylist('https://example.com/list')).rejects.toThrow(
+        'preview limits',
+      );
+    },
+  );
+  it('rejects a single-video response and unsafe input before launching', async () => {
+    const { service, runProcess } = setup(async () => ({ code: 0 }));
+    await expect(service.fetchPlaylist('https://example.com/video')).rejects.toThrow('playlist');
+    runProcess.mockClear();
+    await expect(service.fetchPlaylist('file:///private')).rejects.toThrow();
+    await expect(
+      service.fetchPlaylist('https://example.com/list', { extraArgs: '--exec command' }),
+    ).rejects.toThrow();
+    expect(runProcess).not.toHaveBeenCalled();
+  });
+  it('redacts failures and lets a late cancellation win over a completed preview', async () => {
+    const cookieFile = path.resolve('private/cookies.txt');
+    const { service } = setup(async (_file, _args, handlers) => {
+      handlers.onStderrLine(`${cookieFile} https://example.com/?secret=token`);
+      return { code: 1 };
+    });
+    await expect(service.fetchPlaylist('https://example.com/list', { cookieFile })).rejects.toThrow(
+      '[redacted]',
+    );
+    await service.fetchPlaylist('https://example.com/list', { cookieFile }).catch((error) => {
+      expect(error.message).not.toContain('token');
+      expect(error.message).not.toContain(cookieFile);
+    });
+    const controller = new AbortController();
+    const late = setup(async (_file, _args, handlers) => {
+      handlers.onStdoutLine(`${PROTOCOL.playlist}${JSON.stringify(preview([entry(1)]))}`);
+      controller.abort();
+      return { code: 0 };
+    });
+    await expect(
+      late.service.fetchPlaylist('https://example.com/list', {}, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import DownloadQueue from '../../src/main/downloadQueue.js';
+import persistence from '../../src/main/persistence.js';
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const success = { success: true, filepath: '/tmp/video.mp4' };
@@ -12,6 +13,248 @@ const job = (id, status = 'pending', extra = {}) => ({
   status,
   progress: 0,
   ...extra,
+});
+
+describe('concurrent queue scheduling and atomic batches', () => {
+  it('starts three independent jobs and fills only a settled slot', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    const ids = queue.addBatch(['a', 'b', 'c', 'd', 'e'].map(url), '/tmp');
+    await flush();
+    expect(runs.map((run) => run.url)).toEqual(['a', 'b', 'c'].map(url));
+    expect(new Set(runs.map((run) => run.signal)).size).toBe(3);
+    expect(queue.getQueueState()).toMatchObject({
+      activeIds: ids.slice(0, 3),
+      maxConcurrent: 3,
+      isProcessing: true,
+      currentDownload: { id: ids[0] },
+    });
+    runs[1].resolve(success);
+    await flush();
+    expect(runs).toHaveLength(4);
+    expect(runs[3].url).toBe(url('d'));
+    expect(queue.getQueueState().activeIds).toEqual([ids[0], ids[2], ids[3]]);
+    expect(queue.getDownload(ids[1]).status).toBe('completed');
+    expect(queue.getDownload(ids[4]).status).toBe('pending');
+  });
+
+  it('keeps a cancelled slot reserved until its child exits without aborting peers', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    const ids = queue.addBatch(['a', 'b', 'c', 'd'].map(url), '/tmp');
+    const cancelled = vi.fn();
+    queue.on('download-cancelled', cancelled);
+    await flush();
+    queue.cancelDownload(ids[0]);
+    expect(runs.map((run) => run.signal.aborted)).toEqual([true, false, false]);
+    expect(queue.getQueueState().activeIds).toContain(ids[0]);
+    await flush();
+    expect(runs).toHaveLength(3);
+    runs[0].progress({ percent: 99 });
+    runs[0].resolve(success);
+    await flush();
+    expect(runs).toHaveLength(4);
+    expect(runs[3].url).toBe(url('d'));
+    expect(queue.getDownload(ids[0])).toMatchObject({ status: 'cancelled', progress: 0 });
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(queue.history).toHaveLength(1);
+  });
+
+  it('lowers concurrency without stopping active jobs and raises it immediately', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    queue.addBatch(['a', 'b', 'c', 'd', 'e', 'f'].map(url), '/tmp');
+    await flush();
+    expect(queue.setConcurrency(1)).toBe(1);
+    expect(runs.every((run) => !run.signal.aborted)).toBe(true);
+    runs[0].resolve(success);
+    runs[1].resolve(success);
+    await flush();
+    expect(runs).toHaveLength(3);
+    runs[2].resolve(success);
+    await flush();
+    expect(runs.map((run) => run.url)).toEqual(['a', 'b', 'c', 'd'].map(url));
+    queue.setConcurrency(3);
+    await flush();
+    expect(runs.map((run) => run.url)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'].map(url));
+    expect(queue.getQueueState().activeIds).toHaveLength(3);
+  });
+
+  it('validates the concurrency range and supports configuring a deferred restore', async () => {
+    const { queue, runs } = controlledQueue();
+    expect(queue.getQueueState().maxConcurrent).toBe(1);
+    for (const value of [0, 6, -1, 2.5, '3', null, NaN, Infinity])
+      expect(() => queue.setConcurrency(value)).toThrow(/between 1 and 5/);
+    queue.loadState(
+      { queue: [job('a', 'downloading'), job('b'), job('c', 'paused'), job('d')] },
+      { start: false },
+    );
+    queue.setConcurrency(3, { start: false });
+    await flush();
+    expect(runs).toHaveLength(0);
+    queue.processNext();
+    await flush();
+    expect(runs.map((run) => run.url)).toEqual(['a', 'b', 'd'].map(url));
+    expect(queue.getDownload('c').status).toBe('paused');
+  });
+
+  it('does not overlap a resumed job with its exiting attempt even when another slot is free', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    const [a, b] = queue.addBatch(['a', 'b'].map(url), '/tmp');
+    await flush();
+    queue.pauseDownload(a);
+    queue.resumeDownload(a);
+    await flush();
+    expect(runs).toHaveLength(2);
+    expect(runs[0].signal.aborted).toBe(true);
+    expect(runs[1].signal.aborted).toBe(false);
+    expect(queue.moveDownload(a, 1)).toBe(false);
+    runs[0].reject(new Error('aborted'));
+    await flush();
+    expect(runs).toHaveLength(3);
+    expect(runs[2].url).toBe(url('a'));
+    expect(runs[2].signal).not.toBe(runs[0].signal);
+    expect(queue.getQueueState().activeIds).toEqual([b, a]);
+    expect(queue.history).toEqual([]);
+  });
+
+  it('serializes duplicate output keys through cancellation while unrelated URLs fill slots', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    const a = queue.addDownload(url('same') + '#first', '/tmp');
+    const duplicate = queue.addDownload(url('same') + '#second', '/tmp/child/..');
+    const b = queue.addDownload(url('b'), '/tmp');
+    const c = queue.addDownload(url('c'), '/tmp');
+    await flush();
+    expect(runs.map((run) => run.url)).toEqual([url('same') + '#first', url('b'), url('c')]);
+    expect(queue.getDownload(duplicate).status).toBe('pending');
+    queue.cancelDownload(a);
+    runs[1].resolve(success);
+    await flush();
+    expect(runs).toHaveLength(3);
+    expect(queue.getQueueState().activeIds).toEqual([a, c]);
+    expect(queue.getDownload(b).status).toBe('completed');
+    runs[0].resolve(success);
+    await flush();
+    expect(runs).toHaveLength(4);
+    expect(runs[3].url).toBe(url('same') + '#second');
+    expect(queue.getQueueState().activeIds).toEqual([c, duplicate]);
+  });
+
+  it('reorders only waiting work while several active jobs continue unchanged', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    const ids = queue.addBatch(['a', 'b', 'c', 'd', 'e'].map(url), '/tmp');
+    await flush();
+    for (const id of ids.slice(0, 3)) expect(queue.moveDownload(id, 4)).toBe(false);
+    expect(queue.pauseDownload(ids[3])).toBe(true);
+    expect(queue.moveDownload(ids[4], 0)).toBe(true);
+    runs[1].resolve(success);
+    await flush();
+    expect(runs[3].url).toBe(url('e'));
+    expect(queue.getDownload(ids[3]).status).toBe('paused');
+    expect(runs.every((run) => !run.signal.aborted)).toBe(true);
+  });
+
+  it('checkpoints every active job before shutdown and waits for all children', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    const ids = queue.addBatch(['a', 'b', 'c', 'd', 'e'].map(url), '/tmp');
+    await flush();
+    queue.pauseDownload(ids[1]);
+    queue.pauseDownload(ids[4]);
+    let settled = false;
+    const stopping = queue.shutdown();
+    void stopping.then(() => {
+      settled = true;
+    });
+    expect(queue.shutdown()).toBe(stopping);
+    expect(queue.getStateForSave().queue.map((item) => item.status)).toEqual([
+      'pending',
+      'paused',
+      'pending',
+      'pending',
+      'paused',
+    ]);
+    expect(runs.every((run) => run.signal.aborted)).toBe(true);
+    expect(() => queue.setConcurrency(5)).toThrow(/shutting down/);
+    runs[0].resolve(success);
+    runs[1].reject(new Error('aborted'));
+    await flush();
+    expect(settled).toBe(false);
+    expect(queue.getQueueState().activeIds).toEqual([ids[2]]);
+    runs[2].resolve(success);
+    const saved = await stopping;
+    expect(saved.history).toEqual([]);
+    expect(runs).toHaveLength(3);
+    expect(queue.getQueueState()).toMatchObject({
+      activeIds: [],
+      isProcessing: false,
+      currentDownload: null,
+    });
+    const restored = controlledQueue({ maxConcurrent: 3 });
+    restored.queue.loadState(saved);
+    await flush();
+    expect(restored.runs.map((run) => run.url)).toEqual(['a', 'c', 'd'].map(url));
+    expect(restored.queue.getDownload(ids[1]).status).toBe('paused');
+    expect(restored.queue.getDownload(ids[4]).status).toBe('paused');
+  });
+
+  it('keeps batch validation, capacity and ID generation atomic', async () => {
+    const { queue, runs } = controlledQueue({ maxQueue: 3, idFactory: () => 'same-id' });
+    const updated = vi.fn();
+    queue.on('queue-updated', updated);
+    expect(() => queue.addBatch([url('valid'), 'file:///secret'], '/tmp')).toThrow();
+    expect(() => queue.addBatch([url('valid')], '/tmp', { extraArgs: '--exec calc' })).toThrow();
+    expect(queue.queue).toEqual([]);
+    expect(updated).not.toHaveBeenCalled();
+    const ids = queue.addBatch([url('a'), url('a') + '#duplicate', url('b')], '/tmp');
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(updated.mock.calls[0][0].queue.map((item) => item.status)).toEqual([
+      'pending',
+      'pending',
+    ]);
+    expect(updated.mock.calls[0][0].queue.map((item) => item.id)).toEqual(ids);
+    updated.mockClear();
+    expect(() => queue.addBatch([url('c'), url('d')], '/tmp')).toThrow(/full/);
+    expect(queue.queue).toHaveLength(2);
+    expect(updated).not.toHaveBeenCalled();
+    await flush();
+    expect(runs).toHaveLength(1);
+  });
+
+  it('adds 500 jobs in one complete snapshot before starting a bounded number', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 5 });
+    const snapshots = [];
+    queue.on('queue-updated', (state) => snapshots.push(state));
+    const ids = queue.addBatch(
+      Array.from({ length: 500 }, (_, index) => url(index)),
+      '/tmp',
+    );
+    expect(ids).toHaveLength(500);
+    expect(snapshots).toHaveLength(6);
+    expect(snapshots.every((state) => state.queue.length === 500)).toBe(true);
+    expect(snapshots[0].queue.every((item) => item.status === 'pending')).toBe(true);
+    await flush();
+    expect(runs).toHaveLength(5);
+    expect(() => queue.addDownload(url('excess'), '/tmp')).toThrow(/full/);
+  });
+
+  it('persists concurrent transitions but never writes individual progress updates', async () => {
+    const { queue, runs } = controlledQueue({ maxConcurrent: 3 });
+    const store = { set: vi.fn() };
+    const adapter = persistence.attachQueuePersistence(queue, store);
+    const ids = queue.addBatch(['a', 'b', 'c'].map(url), '/tmp');
+    await flush();
+    store.set.mockClear();
+    for (const run of runs)
+      for (let percent = 1; percent <= 100; percent++) run.progress({ percent });
+    expect(store.set).not.toHaveBeenCalled();
+    queue.pauseDownload(ids[1]);
+    expect(store.set).toHaveBeenCalledTimes(1);
+    expect(store.set.mock.lastCall[1].queue.map((item) => item.status)).toEqual([
+      'downloading',
+      'paused',
+      'downloading',
+    ]);
+    expect(store.set.mock.lastCall[1].queue.every((item) => item.progress === 100)).toBe(true);
+    adapter.dispose();
+  });
 });
 
 function controlledQueue(options = {}) {

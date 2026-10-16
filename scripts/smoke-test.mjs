@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { _electron as electron } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -106,6 +108,26 @@ try {
   );
   assert.equal(arbitraryFolder.ok, false);
 
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
+  const second = spawn(executablePath, packaged || installedExecutable ? [] : [root], {
+    env: environment,
+    shell: false,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  const secondTimeout = setTimeout(() => second.kill(), 15000);
+  try {
+    const [exitCode] = await once(second, 'close');
+    assert.equal(exitCode, 0, 'The second instance exits without creating another app.');
+  } finally {
+    clearTimeout(secondTimeout);
+  }
+  assert.equal(
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()),
+    true,
+    'The second launch reopens the existing window.',
+  );
+
   // The native dialog boundary is replaced only inside this isolated test process.
   await application.evaluate(({ dialog }, folder) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
@@ -115,6 +137,68 @@ try {
     (folder) => document.querySelector('#download-path').value === folder,
     downloads,
   );
+  await page.locator('#max-concurrent').selectOption('3');
+  await page.waitForFunction(
+    async () => (await window.videoNinja.getInitialState()).data.settings.maxConcurrent === 3,
+  );
+  // Stub only the external tool boundary for this GUI flow; test:media exercises
+  // the actual executables separately. Native IPC, queue and persistence stay real.
+  await application.evaluate(({ app }, folder) => {
+    const adapter = process.mainModule.require(app.getAppPath() + '/src/main/ytdlp.js');
+    globalThis.smokeDownloadCount = 0;
+    adapter.checkYtDlpAvailability = async () => ({
+      available: true,
+      version: 'test fixture',
+      path: 'fixture',
+      jsRuntimes: [],
+    });
+    adapter.checkFfmpegAvailability = async () => ({
+      available: true,
+      version: 'test fixture',
+      path: 'fixture',
+    });
+    adapter.fetchPlaylist = async () => ({
+      title: 'Smoke playlist',
+      entries: [
+        {
+          id: 'a',
+          index: 1,
+          title: '<img src=x onerror="window.injected=true">',
+          url: 'https://example.invalid/a',
+          available: true,
+        },
+        { id: 'b', index: 2, title: 'Unavailable video', url: null, available: false },
+        {
+          id: 'c',
+          index: 3,
+          title: 'Second video',
+          url: 'https://example.invalid/c',
+          available: true,
+        },
+      ],
+    });
+    adapter.downloadVideo = async (url) => {
+      globalThis.smokeDownloadCount++;
+      return {
+        success: true,
+        filepath: folder + '/fixture.mp4',
+        metadata: { title: url.endsWith('/a') ? 'First selected video' : 'Second selected video' },
+      };
+    };
+  }, downloads);
+  await page.locator('#recheck-tools').click();
+  await page.locator('#video-urls').fill('https://example.invalid/list');
+  await page.locator('#playlist-preview-button').click();
+  await page.waitForFunction(() => document.querySelectorAll('#playlist-list input').length === 3);
+  assert.equal(await application.evaluate(() => globalThis.smokeDownloadCount), 0);
+  assert.equal(await page.locator('#playlist-list img').count(), 0);
+  assert.equal(await page.locator('#playlist-list input[data-index="2"]').isDisabled(), true);
+  await page.locator('#playlist-list input[data-index="1"]').check();
+  await page.locator('#playlist-list input[data-index="3"]').check();
+  await screenshot(`${mode}-playlist.png`, page);
+  await page.locator('#playlist-add-selected').click();
+  await page.waitForFunction(() => document.querySelectorAll('#history-list > li').length === 2);
+  assert.equal(await application.evaluate(() => globalThis.smokeDownloadCount), 2);
   await page.locator('#language').selectOption('fi');
   await page.waitForFunction(() => document.documentElement.lang === 'fi');
   await page.waitForFunction(
@@ -126,6 +210,7 @@ try {
   const config = JSON.parse(await fs.readFile(configFile, 'utf8'));
   assert.equal(config.settings.downloadPath, downloads);
   assert.equal(config.settings.language, 'fi');
+  assert.equal(config.settings.maxConcurrent, 3);
   const hostile = '<img src=x onerror="window.injected=true">';
   const job = (id, status) => ({
     id,
@@ -209,6 +294,16 @@ try {
     saved.queueState.queue.every((item) => item.status === 'paused'),
     true,
   );
+  await fs.writeFile(configFile, '{broken-json');
+  page = await launch();
+  assert.equal(await page.locator('#settings-panel').isVisible(), true);
+  assert.equal(await page.locator('#warnings').isVisible(), true);
+  const backups = (await fs.readdir(profile)).filter((name) =>
+    name.startsWith('config.json.corrupt-'),
+  );
+  assert.equal(backups.length, 1, 'Corrupt configuration is preserved instead of discarded.');
+  assert.equal(await fs.readFile(path.join(profile, backups[0]), 'utf8'), '{broken-json');
+  await close();
   assert.deepEqual(errors, [], 'Renderer has no uncaught errors.');
   console.log(
     `${mode} Electron smoke passed: sandbox, setup, IPC, languages, 500 queued jobs, 100 history entries, focus, reload, persistence and 200% layout.`,

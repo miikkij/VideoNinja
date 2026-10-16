@@ -139,9 +139,22 @@ try {
   const files = new Map(
     (await readdir(source)).map((name) => [`/${name}`, path.join(source, name)]),
   );
+  const requests = [];
   server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://127.0.0.1');
+      requests.push({ path: url.pathname, method: request.method });
+      if (url.pathname === '/playlist.html' && ['GET', 'HEAD'].includes(request.method)) {
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.end(
+          request.method === 'HEAD'
+            ? undefined
+            : '<html><head><title>Owned playlist</title></head><body>' +
+                '<video controls src="/fixture.mp4?alias=playlist-one"></video>' +
+                '<video controls src="/fixture.mp4?alias=playlist-two"></video></body></html>',
+        );
+        return;
+      }
       const filename = files.get(decodeURIComponent(url.pathname));
       if (!filename || !['GET', 'HEAD'].includes(request.method)) {
         response.writeHead(404).end();
@@ -219,6 +232,31 @@ try {
   }
 
   const url = `${base}/fixture.mp4?literal=one&second=two`;
+  const playlist = await ytdlp.fetchPlaylist(
+    `${base}/playlist.html`,
+    {},
+    {
+      signal: controller.signal,
+    },
+  );
+  assert.equal(playlist.title, 'Owned playlist');
+  assert.equal(playlist.entries.length, 2);
+  assert.equal(playlist.hasMore, false);
+  assert.deepEqual(
+    playlist.entries.map((entry) => ({
+      index: entry.index,
+      url: entry.url,
+      available: entry.available,
+    })),
+    [
+      { index: 1, url: `${base}/fixture.mp4?alias=playlist-one`, available: true },
+      { index: 2, url: `${base}/fixture.mp4?alias=playlist-two`, available: true },
+    ],
+  );
+  assert(
+    requests.every((request) => request.path === '/playlist.html' || request.method === 'HEAD'),
+    'Flat playlist preview must not download the media fixtures.',
+  );
   const metadata = await ytdlp.fetchMetadata(url, {}, { signal: controller.signal });
   assert(metadata.title && metadata.id, 'Metadata preview should return a title and source ID.');
   const first = await download(url, output);
@@ -237,6 +275,16 @@ try {
     before.mtimeMs,
     'Existing complete files must not be overwritten.',
   );
+  const aliases = await Promise.all([
+    download(`${base}/fixture.mp4?alias=a`, output),
+    download(`${base}/fixture.mp4?alias=b`, output),
+  ]);
+  assert.notEqual(aliases[0].filepath, aliases[1].filepath);
+  for (const alias of aliases) {
+    assert.match(path.basename(alias.filepath), /\[best-[a-f0-9]{16}\]/u);
+    assert.equal(await hashFile(alias.filepath), originalHash);
+    assert.deepEqual(await streamTypes(alias.filepath), ['audio', 'video']);
+  }
 
   const merged = await download(`${base}/manifest.mpd`, output);
   assert.deepEqual(await streamTypes(merged.filepath), ['audio', 'video']);
@@ -263,9 +311,11 @@ try {
     JSON.stringify(
       {
         passed: [
+          'flat-playlist-without-media-downloads',
           'metadata',
           'progressive',
           'already-downloaded',
+          'parallel-alias-isolation',
           'dash-merge',
           'original-audio',
           'mp3-conversion',

@@ -61,15 +61,41 @@ at any time. Start at login is optional and should be enabled from the installed
 4. Click **Add to queue**, or press Enter. Shift+Enter inserts a newline.
 5. The form clears only after the main process accepts the batch.
 
-The queue runs one download at a time. Use **Pause**, **Resume**, **Cancel** and
-the move controls to manage it. Pause preserves partial files where supported.
-Cancel stops that job; it does not delete downloaded or partial files.
+The queue runs one download at a time by default. In Settings, choose 1–5 under
+**Maximum simultaneous downloads**. Raising the limit starts more waiting jobs;
+lowering it lets active jobs finish. Repeated jobs for the same URL and folder
+wait for each other even when a slot is free. More parallel downloads share your
+connection and may meet source-site limits.
+
+Use **Pause**, **Resume**, **Cancel** and the move controls to manage each job.
+Pause preserves partial files where supported. Cancel stops that job; it does not
+delete downloaded or partial files. Other active jobs continue independently.
+Ordinary batches accept up to 100 links, deduplicate repeated links in the batch,
+and fit within the total queue limit of 500 jobs.
 
 For **Audio only**, choose Original format or a conversion format. Conversion and
 separate-stream merging require ffmpeg. A quality limit is a maximum, not a promise
 that the source offers that resolution.
 
-## 4. Use history and exit
+## 4. Select videos from a playlist
+
+1. Paste a playlist URL as the first link in the input.
+2. Choose the quality/audio options in the main form.
+3. Choose **Choose from playlist**. This fetches metadata without downloading media files.
+4. Tick the videos you want, or use **Select all available**. Nothing is selected initially.
+5. Choose **Add selected to queue** to enqueue the selected videos.
+
+Unavailable/private entries are disabled. The preview shows at most the first
+500 entries and displays a notice if more exist. Use a smaller playlist or
+individual video links for later entries. Selected jobs must fit within the
+queue's remaining capacity; duplicates in the selection are added once.
+
+The preview expires after 15 minutes. Close and preview again if it expires;
+closing also cancels an in-progress preview. A failed enqueue keeps the selection
+and shows its error. Ordinary **Add to queue** handles individual jobs and does
+not expand the entire playlist; use the selection dialog for playlist downloads.
+
+## 5. Use history and exit
 
 Completed entries offer file and folder actions. A file moved or removed outside
 the app can no longer be opened from its old entry. Failed entries retain an

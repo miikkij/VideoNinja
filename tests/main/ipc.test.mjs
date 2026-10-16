@@ -10,6 +10,9 @@ function fixture(overrides = {}) {
   let settings = { downloadPath: folder, language: 'en', quality: 'best', jsRuntime: 'auto' };
   const queue = overrides.queue || {
     addDownload: vi.fn(() => 'new-id'),
+    addBatch: vi.fn((urls, outputPath, options) =>
+      urls.map((url) => queue.addDownload(url, outputPath, options)),
+    ),
     getQueueState: () => ({ queue: [] }),
     cancelDownload: vi.fn(() => true),
     clearHistory: vi.fn(),

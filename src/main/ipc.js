@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { constants } = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const { validateUrl, normalizeOptions } = require('./downloadOptions');
 const { sanitizeSettings, MAX_QUEUE_ITEMS } = require('./persistence');
 
@@ -118,6 +119,8 @@ function createHandlers(deps) {
   const folders = new Set();
   const cookies = new Set();
   let previewController = null;
+  let playlistController = null;
+  let playlistCache = null;
   const previewTasks = new Set();
   let disposing = false;
 
@@ -202,9 +205,18 @@ function createHandlers(deps) {
         'jsRuntime',
         'language',
         'quality',
+        'maxConcurrent',
       ]);
       const previous = getSettings();
       const merged = { ...previous, ...input };
+      if (
+        merged.maxConcurrent !== undefined &&
+        (!Number.isInteger(merged.maxConcurrent) ||
+          merged.maxConcurrent < 1 ||
+          merged.maxConcurrent > 5)
+      ) {
+        throw new UserError('Choose between 1 and 5 simultaneous downloads.', 'INVALID_OPTIONS');
+      }
       if (
         merged.downloadPath &&
         merged.downloadPath !== previous.downloadPath &&
@@ -256,7 +268,7 @@ function createHandlers(deps) {
       const folder = await requireFolder();
       if (queue.getQueueState().queue.length + urls.length > MAX_QUEUE_ITEMS)
         throw new UserError('The queue is full.');
-      return urls.map((url) => queue.addDownload(url, folder, options));
+      return queue.addBatch(urls, folder, options);
     },
     cancelDownload: (value) => changeJob('cancelDownload', value),
     pauseDownload: (value) => changeJob('pauseDownload', value),
@@ -370,6 +382,100 @@ function createHandlers(deps) {
         if (previewController === controller) previewController = null;
       }
     },
+    previewPlaylist: async (input) => {
+      if (disposing) throw new UserError('The application is shutting down.', 'INVALID_STATE');
+      record(input, ['url', 'options']);
+      const url = asUrl(input.url);
+      const options = asOptions(input.options);
+      playlistController?.abort();
+      playlistCache = null;
+      const controller = new AbortController();
+      playlistController = controller;
+      const task = Promise.resolve().then(() =>
+        tools.fetchPlaylist(url, options, { signal: controller.signal }),
+      );
+      previewTasks.add(task);
+      try {
+        const result = await task;
+        if (controller.signal.aborted || playlistController !== controller || disposing) {
+          throw new UserError('The playlist preview was cancelled.', 'INVALID_STATE');
+        }
+        const entries = (Array.isArray(result.entries) ? result.entries : [])
+          .slice(0, MAX_QUEUE_ITEMS)
+          .map((entry, position) => {
+            let entryUrl = null;
+            try {
+              entryUrl = validateUrl(entry.url);
+            } catch {
+              /* Unavailable items remain visible. */
+            }
+            return {
+              id: typeof entry.id === 'string' ? entry.id.slice(0, 256) : String(position + 1),
+              index: position + 1,
+              title: typeof entry.title === 'string' ? entry.title.slice(0, 512) : '',
+              url: entryUrl,
+              available: Boolean(entry.available && entryUrl),
+              duration:
+                Number.isFinite(entry.duration) && entry.duration >= 0 ? entry.duration : null,
+            };
+          });
+        if (!entries.length)
+          throw new UserError('No playlist entries were found.', 'PLAYLIST_EMPTY');
+        const preview = {
+          previewId: randomUUID(),
+          title: typeof result.title === 'string' ? result.title.slice(0, 512) : '',
+          entries,
+          hasMore: Boolean(result.hasMore || result.entries.length > MAX_QUEUE_ITEMS),
+          maxEntries: MAX_QUEUE_ITEMS,
+        };
+        playlistCache = { preview, expires: Date.now() + 15 * 60 * 1000 };
+        return preview;
+      } finally {
+        previewTasks.delete(task);
+        if (playlistController === controller) playlistController = null;
+      }
+    },
+    cancelPlaylistPreview: () => {
+      playlistController?.abort();
+      playlistCache = null;
+      return true;
+    },
+    addPlaylistSelection: async (input) => {
+      record(input, ['previewId', 'indices', 'options']);
+      const cached = playlistCache;
+      if (!cached || cached.preview.previewId !== input.previewId || cached.expires < Date.now()) {
+        throw new UserError('Preview the playlist again before adding it.', 'PLAYLIST_EXPIRED');
+      }
+      if (
+        !Array.isArray(input.indices) ||
+        !input.indices.length ||
+        input.indices.length > MAX_QUEUE_ITEMS ||
+        input.indices.some((value) => !Number.isInteger(value)) ||
+        new Set(input.indices).size !== input.indices.length
+      ) {
+        throw new UserError('Choose one or more available playlist entries.', 'INVALID_REQUEST');
+      }
+      const selected = new Set(input.indices);
+      const entries = cached.preview.entries.filter((entry) => selected.has(entry.index));
+      if (entries.length !== selected.size || entries.some((entry) => !entry.available)) {
+        throw new UserError('The selected playlist entries are unavailable.', 'INVALID_REQUEST');
+      }
+      const options = asOptions(input.options);
+      const folder = await requireFolder();
+      if (playlistCache !== cached || disposing) {
+        throw new UserError('Preview the playlist again before adding it.', 'PLAYLIST_EXPIRED');
+      }
+      const urls = [...new Set(entries.map((entry) => entry.url))];
+      if (queue.getQueueState().queue.length + urls.length > MAX_QUEUE_ITEMS) {
+        throw new UserError(
+          'The queue is full. Choose fewer entries or wait for downloads to finish.',
+          'QUEUE_FULL',
+        );
+      }
+      const ids = queue.addBatch(urls, folder, options);
+      playlistCache = null;
+      return ids;
+    },
     openExternal: async (url) => {
       if (typeof url !== 'string' || !HELP_URLS.has(url))
         throw new UserError('This help link is not allowed.', 'FORBIDDEN');
@@ -382,6 +488,8 @@ function createHandlers(deps) {
     async dispose() {
       disposing = true;
       previewController?.abort();
+      playlistController?.abort();
+      playlistCache = null;
       // Superseded previews can still be terminating their Windows process tree.
       await Promise.allSettled([...previewTasks]);
     },

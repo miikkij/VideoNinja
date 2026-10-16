@@ -56,6 +56,24 @@
       quality: 'Quality',
       qualityBest: 'Best available',
       qualityAudio: 'Audio only',
+      maxConcurrent: 'Maximum simultaneous downloads',
+      concurrencyHint:
+        'Start with one. More simultaneous downloads share your connection and may be limited by the source website.',
+      previewPlaylist: 'Choose from playlist',
+      playlistHeading: 'Choose videos from a playlist',
+      playlistDescription:
+        'Uses the first link above. Previewing does not download media files. Select the videos you want to add to the queue.',
+      playlistLoading: 'Reading the playlist… You can close this window to cancel.',
+      playlistSelection: '{selected} of {available} available videos selected',
+      playlistLimit:
+        'Showing the first {count} playlist entries. Choose a smaller playlist to reach later videos.',
+      playlistUnavailable: 'Unavailable',
+      playlistUntitled: 'Video {index}',
+      playlistEmpty: 'No downloadable videos were found in this playlist.',
+      selectAll: 'Select all available',
+      clearSelection: 'Clear selection',
+      addSelected: 'Add selected to queue',
+      playlistAdding: 'Adding selected videos…',
       audioFormat: 'Audio format',
       audioOriginal: 'Original format',
       preview: 'Preview first link',
@@ -140,6 +158,10 @@
       actionFor: '{action}: {title}',
       retryQueued: 'A new attempt was added to the queue.',
       error_INVALID_REQUEST: 'Review the selected settings and try again.',
+      error_PLAYLIST_EMPTY: 'No available videos were found in this playlist.',
+      error_PLAYLIST_EXPIRED:
+        'This playlist preview has expired. Close it and preview the playlist again.',
+      error_QUEUE_FULL: 'The queue is full. Let downloads finish or select fewer videos.',
       error_FORBIDDEN: 'This action is not allowed.',
       error_OPERATION_FAILED: 'The operation failed. Check the selected options and folder.',
       error_INVALID_OPTIONS:
@@ -220,6 +242,24 @@
       quality: 'Laatu',
       qualityBest: 'Paras saatavilla oleva',
       qualityAudio: 'Vain ääni',
+      maxConcurrent: 'Samanaikaisten latausten enimmäismäärä',
+      concurrencyHint:
+        'Aloita yhdellä. Samanaikaiset lataukset jakavat verkkoyhteyden, ja lähdesivusto voi rajoittaa niitä.',
+      previewPlaylist: 'Valitse soittolistalta',
+      playlistHeading: 'Valitse videot soittolistalta',
+      playlistDescription:
+        'Käyttää yllä olevaa ensimmäistä linkkiä. Esikatselu ei lataa mediatiedostoja. Valitse videot, jotka haluat lisätä jonoon.',
+      playlistLoading: 'Luetaan soittolistaa… Voit peruuttaa sulkemalla tämän ikkunan.',
+      playlistSelection: 'Valittu {selected} / {available} saatavilla olevaa videota',
+      playlistLimit:
+        'Näytetään soittolistan ensimmäiset {count} kohdetta. Käytä pienempää soittolistaa päästäksesi myöhempiin videoihin.',
+      playlistUnavailable: 'Ei saatavilla',
+      playlistUntitled: 'Video {index}',
+      playlistEmpty: 'Soittolistalta ei löytynyt ladattavia videoita.',
+      selectAll: 'Valitse kaikki saatavilla olevat',
+      clearSelection: 'Tyhjennä valinta',
+      addSelected: 'Lisää valitut jonoon',
+      playlistAdding: 'Lisätään valitut videot…',
       audioFormat: 'Äänimuoto',
       audioOriginal: 'Alkuperäinen muoto',
       preview: 'Esikatsele ensimmäinen linkki',
@@ -304,6 +344,11 @@
       actionFor: '{action}: {title}',
       retryQueued: 'Uusi yritys lisättiin jonoon.',
       error_INVALID_REQUEST: 'Tarkista valitut asetukset ja yritä uudelleen.',
+      error_PLAYLIST_EMPTY: 'Soittolistalta ei löytynyt saatavilla olevia videoita.',
+      error_PLAYLIST_EXPIRED:
+        'Soittolistan esikatselu vanheni. Sulje se ja avaa esikatselu uudelleen.',
+      error_QUEUE_FULL:
+        'Latausjono on täynnä. Odota latausten valmistumista tai valitse vähemmän videoita.',
       error_FORBIDDEN: 'Tämä toiminto ei ole sallittu.',
       error_OPERATION_FAILED: 'Toiminto epäonnistui. Tarkista latausvalinnat ja kansio.',
       error_INVALID_OPTIONS:

@@ -7,7 +7,7 @@
   const listeners = new AbortController();
   const subscriptions = [];
   const rows = new Map();
-  let settings = { language: 'en', quality: 'best', jsRuntime: 'auto' };
+  let settings = { language: 'en', quality: 'best', jsRuntime: 'auto', maxConcurrent: 1 };
   let queue = { queue: [], history: [] };
   let tools = {};
   let diskSpace = null;
@@ -20,6 +20,11 @@
   let retryId = null;
   let retryOpener = null;
   let previewRevision = 0;
+  let playlistRevision = 0;
+  let playlistPreviewId = null;
+  let playlistRows = [];
+  let playlistLoading = false;
+  let playlistAdding = false;
 
   function listen(element, event, callback, signal = listeners.signal) {
     element.addEventListener(event, callback, { signal });
@@ -167,6 +172,8 @@
       Boolean(tools.ytdlp?.available);
     $('add-downloads').disabled = !ready || adding;
     $('preview-button').disabled = !initialized || !tools.ytdlp?.available;
+    $('playlist-preview-button').disabled =
+      !initialized || !tools.ytdlp?.available || playlistLoading;
     $('readiness').textContent = !settingsSaved
       ? t('saveFailed')
       : !settings.downloadPath
@@ -179,6 +186,7 @@
   function applySettings() {
     i18n.setLanguage(settings.language);
     $('language').value = settings.language === 'fi' ? 'fi' : 'en';
+    $('max-concurrent').value = String(settings.maxConcurrent || 1);
     $('download-path').value = settings.downloadPath || '';
     $('cookie-source').value = settings.cookieSource || '';
     $('cookie-file').value = settings.cookieFilePath || '';
@@ -198,6 +206,7 @@
     renderTools();
     renderDisk();
     renderQueue();
+    renderPlaylistSelection();
   }
   function saveSettings(patch) {
     settings = { ...settings, ...patch };
@@ -231,11 +240,12 @@
       });
     return saveChain;
   }
-  function parseUrls() {
+  function parseUrls(firstOnly = false) {
     const urls = $('video-urls')
       .value.split(/\r?\n/)
       .map((url) => url.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .slice(0, firstOnly ? 1 : undefined);
     if (!urls.length) throw new Error(t('emptyUrls'));
     if (urls.length > 100) throw new Error(t('tooManyUrls'));
     urls.forEach((value, index) => {
@@ -305,10 +315,10 @@
     renderReadiness();
     try {
       if (!(await saveChain)) throw new Error(t('saveFailed'));
-      await request('addDownloads', { urls, options });
+      const accepted = await request('addDownloads', { urls, options });
       if ($('video-urls').value === submittedText) $('video-urls').value = '';
       $('preview-panel').hidden = true;
-      notice(t('added', { count: urls.length }));
+      notice(t('added', { count: Array.isArray(accepted) ? accepted.length : urls.length }));
       $('video-urls').focus();
     } catch (error) {
       formError(error.message);
@@ -616,26 +626,162 @@
     if (retryOpener?.isConnected) retryOpener.focus();
     else $('video-urls').focus();
   }
-  function dialogKeydown(event) {
+  function dialogKeydown(event, dialog = $('retry-dialog'), close = closeRetry) {
     if (event.key === 'Escape') {
       event.preventDefault();
-      closeRetry();
+      close();
       return;
     }
     if (event.key !== 'Tab') return;
     const focusable = [
-      ...$('retry-dialog').querySelectorAll(
+      ...dialog.querySelectorAll(
         'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
       ),
     ].filter((el) => !el.closest('[hidden]'));
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
+    if (!first) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
     if (event.shiftKey && document.activeElement === first) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
       first.focus();
+    }
+  }
+  function renderPlaylistSelection() {
+    const available = playlistRows.filter((row) => row.available);
+    const selected = available.filter((row) => row.checkbox.checked);
+    const busy = playlistLoading || playlistAdding;
+    for (const row of playlistRows) row.checkbox.disabled = !row.available || busy;
+    $('playlist-select-all').disabled = busy || !playlistPreviewId || !available.length;
+    $('playlist-clear-selection').disabled = busy || !selected.length;
+    $('playlist-add-selected').disabled = busy || !playlistPreviewId || !selected.length;
+    $('playlist-close').disabled = playlistAdding;
+    $('playlist-status').textContent = playlistAdding
+      ? t('playlistAdding')
+      : playlistLoading
+        ? t('playlistLoading')
+        : !playlistPreviewId
+          ? ''
+          : !available.length
+            ? t('playlistEmpty')
+            : t('playlistSelection', { selected: selected.length, available: available.length });
+  }
+  function renderPlaylist(preview) {
+    playlistPreviewId = preview.previewId;
+    playlistRows = [];
+    const entries = Array.isArray(preview.entries) ? preview.entries : [];
+    const fragment = document.createDocumentFragment();
+    const indices = new Set();
+    for (const entry of entries.slice(0, 500)) {
+      if (!Number.isInteger(entry.index) || entry.index < 1 || indices.has(entry.index)) continue;
+      indices.add(entry.index);
+      const item = create('li', '', fragment);
+      const label = create('label', 'playlist-entry', item);
+      const checkbox = create('input', '', label);
+      checkbox.type = 'checkbox';
+      checkbox.dataset.index = String(entry.index);
+      const info = create('span', '', label);
+      const title = create('strong', '', info);
+      title.textContent = entry.title || t('playlistUntitled', { index: entry.index });
+      const available =
+        entry.available === true && typeof entry.url === 'string' && Boolean(entry.url);
+      const detail = create('small', 'hint', info);
+      detail.textContent = !available
+        ? t('playlistUnavailable')
+        : entry.duration != null
+          ? t('duration', { duration: duration(entry.duration) })
+          : '';
+      playlistRows.push({ index: entry.index, checkbox, available });
+    }
+    $('playlist-list').replaceChildren(fragment);
+    $('playlist-title').textContent = preview.title || '';
+    $('playlist-limit').hidden = !preview.hasMore && entries.length <= 500;
+    $('playlist-limit').textContent = t('playlistLimit', {
+      count: Math.min(500, Number(preview.maxEntries) || 500),
+    });
+    renderPlaylistSelection();
+  }
+  async function openPlaylist() {
+    formError('');
+    let url;
+    let options;
+    try {
+      url = parseUrls(true)[0];
+      options = downloadOptions();
+    } catch (error) {
+      formError(error.message);
+      return;
+    }
+    const revision = ++playlistRevision;
+    playlistLoading = true;
+    playlistAdding = false;
+    playlistPreviewId = null;
+    playlistRows = [];
+    $('playlist-list').replaceChildren();
+    $('playlist-title').textContent = '';
+    $('playlist-limit').hidden = true;
+    $('playlist-error').hidden = true;
+    renderPlaylistSelection();
+    renderReadiness();
+    $('playlist-dialog').showModal();
+    $('playlist-close').focus();
+    try {
+      const result = await request('previewPlaylist', { url, options });
+      if (revision !== playlistRevision || !$('playlist-dialog').open) return;
+      playlistLoading = false;
+      renderPlaylist(result);
+    } catch (error) {
+      if (revision !== playlistRevision || !$('playlist-dialog').open) return;
+      playlistLoading = false;
+      $('playlist-error').textContent = error.message;
+      $('playlist-error').hidden = false;
+      renderPlaylistSelection();
+    } finally {
+      if (revision === playlistRevision) renderReadiness();
+    }
+  }
+  function closePlaylist(cancel = true) {
+    if (playlistAdding) return;
+    playlistRevision++;
+    playlistLoading = false;
+    playlistPreviewId = null;
+    if ($('playlist-dialog').open) $('playlist-dialog').close();
+    renderReadiness();
+    $('playlist-preview-button').focus();
+    if (cancel) void request('cancelPlaylistPreview').catch((error) => notice(error.message, true));
+  }
+  async function addPlaylistSelection() {
+    if (playlistAdding || !playlistPreviewId) return;
+    const indices = playlistRows
+      .filter((row) => row.available && row.checkbox.checked)
+      .map((row) => row.index);
+    if (!indices.length) return;
+    playlistAdding = true;
+    $('playlist-error').hidden = true;
+    renderPlaylistSelection();
+    try {
+      if (!settings.downloadPath) throw new Error(t('needFolder'));
+      if (!(await saveChain)) throw new Error(t('saveFailed'));
+      const accepted = await request('addPlaylistSelection', {
+        previewId: playlistPreviewId,
+        indices,
+        options: downloadOptions(),
+      });
+      playlistAdding = false;
+      closePlaylist(false);
+      notice(t('added', { count: Array.isArray(accepted) ? accepted.length : indices.length }));
+    } catch (error) {
+      $('playlist-error').textContent = error.message;
+      $('playlist-error').hidden = false;
+    } finally {
+      playlistAdding = false;
+      renderPlaylistSelection();
     }
   }
   async function loadInitial() {
@@ -681,6 +827,9 @@
   listen($('quality'), 'change', () => {
     $('audio-format-field').hidden = $('quality').value !== 'audio';
     void saveSettings({ quality: $('quality').value });
+  });
+  listen($('max-concurrent'), 'change', () => {
+    void saveSettings({ maxConcurrent: Number($('max-concurrent').value) });
   });
   listen($('recheck-tools'), 'click', () =>
     action($('recheck-tools'), async () => {
@@ -760,7 +909,7 @@
       let urls;
       let options;
       try {
-        urls = parseUrls();
+        urls = parseUrls(true);
         options = downloadOptions();
       } catch (error) {
         formError(error.message);
@@ -783,6 +932,33 @@
     }),
   );
   listen($('history-search'), 'input', filterHistory);
+  listen($('playlist-preview-button'), 'click', () => {
+    void openPlaylist();
+  });
+  listen($('playlist-close'), 'click', () => closePlaylist());
+  listen($('playlist-dialog'), 'cancel', (event) => {
+    event.preventDefault();
+    closePlaylist();
+  });
+  listen($('playlist-dialog'), 'keydown', (event) =>
+    dialogKeydown(event, $('playlist-dialog'), closePlaylist),
+  );
+  listen($('playlist-list'), 'change', renderPlaylistSelection);
+  listen($('playlist-select-all'), 'click', () => {
+    playlistRows.forEach((row) => {
+      row.checkbox.checked = row.available;
+    });
+    renderPlaylistSelection();
+  });
+  listen($('playlist-clear-selection'), 'click', () => {
+    playlistRows.forEach((row) => {
+      row.checkbox.checked = false;
+    });
+    renderPlaylistSelection();
+  });
+  listen($('playlist-add-selected'), 'click', () => {
+    void addPlaylistSelection();
+  });
   listen($('clear-history'), 'click', () =>
     action($('clear-history'), async () => {
       const result = await request('clearHistory');
@@ -845,7 +1021,7 @@
     }
   });
   listen(document, 'keydown', (event) => {
-    if (event.key === 'F3' && !$('retry-dialog').open) {
+    if (event.key === 'F3' && !$('retry-dialog').open && !$('playlist-dialog').open) {
       event.preventDefault();
       openSettings($('settings-panel').hidden);
     }

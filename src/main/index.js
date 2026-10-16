@@ -264,6 +264,7 @@ async function initialize() {
     putSettings: async (value) => {
       store.set('settings', value);
       settings = value;
+      queue.setConcurrency(settings.maxConcurrent);
       updateTray();
       await checkDisk();
     },
@@ -294,7 +295,9 @@ async function initialize() {
     }
   }
   createWindow();
-  queue.loadState(state.queueState);
+  queue.loadState(state.queueState, { start: false });
+  queue.setConcurrency(settings.maxConcurrent, { start: false });
+  queue.processNext();
   void recheckTools().catch(() => {
     warn('TOOL_CHECK_FAILED');
     toolState = { ytdlp: { available: false, jsRuntimes: [] }, ffmpeg: { available: false } };

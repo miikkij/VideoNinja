@@ -1,10 +1,12 @@
 const EventEmitter = require('node:events');
 const { randomUUID } = require('node:crypto');
+const path = require('node:path');
 const { normalizeOptions, validateUrl } = require('./downloadOptions');
 const {
   SCHEMA_VERSION,
   MAX_QUEUE_ITEMS,
   MAX_HISTORY_ITEMS,
+  MAX_CONCURRENT_DOWNLOADS,
   isAbsoluteFilePath,
   redactErrorText,
   sanitizeQueueState,
@@ -15,7 +17,15 @@ const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
 const clone = (value) => structuredClone(value);
 const boundedText = (value, limit) => (typeof value === 'string' ? value.slice(0, limit) : '');
 
-/** Sequential job state machine. The downloader owns child-process cleanup and media files. */
+const resourceUrl = (value) => {
+  const url = new URL(value);
+  url.hash = '';
+  return url.href;
+};
+const validConcurrency = (value) =>
+  Number.isInteger(value) && value >= 1 && value <= MAX_CONCURRENT_DOWNLOADS;
+
+/** Bounded concurrent jobs. The downloader owns child-process cleanup and media files. */
 class DownloadQueue extends EventEmitter {
   constructor(deps = {}) {
     super();
@@ -29,59 +39,127 @@ class DownloadQueue extends EventEmitter {
     this.history = [];
     this.currentDownload = null;
     this.isProcessing = false;
-    this._active = null;
+    this.maxConcurrent = deps.maxConcurrent ?? 1;
+    if (!validConcurrency(this.maxConcurrent))
+      throw new Error('Choose between 1 and 5 concurrent downloads.');
+    this._active = new Map();
+    this._scheduling = false;
     this._shuttingDown = false;
     this._shutdownPromise = null;
   }
 
   addDownload(url, outputPath, options = {}) {
-    if (this._shuttingDown) throw new Error('The application is shutting down.');
-    if (this.queue.length >= this._maxQueue) throw new Error('The download queue is full.');
-    if (!isAbsoluteFilePath(outputPath)) throw new Error('Choose an absolute download folder.');
-    const normalizedUrl = validateUrl(url);
-    const normalizedOptions = normalizeOptions(options);
-    let id = this._idFactory();
-    // A bad injected ID factory must not overwrite another job.
-    if (typeof id !== 'string' || !id || this.getDownload(id)) id = randomUUID();
-    const download = {
-      id,
-      url: normalizedUrl,
-      outputPath,
-      options: normalizedOptions,
-      status: 'pending',
-      phase: 'pending',
-      progress: 0,
-      title: '',
-      addedAt: this._now(),
-      startedAt: null,
-      completedAt: null,
-      error: null,
-      filepath: null,
-    };
-    this.queue.push(download);
-    this._notify();
-    this.processNext();
-    return id;
+    return this.addBatch([url], outputPath, options)[0];
   }
 
-  /** A second child is never started before the current downloader settles. */
-  processNext() {
-    if (this._active || this._shuttingDown) return this._active?.promise;
-    const download = this.queue.find((item) => item.status === 'pending');
-    if (!download) return undefined;
-    const active = { download, controller: new AbortController(), intent: null, promise: null };
-    this._active = active;
-    this.currentDownload = download;
-    this.isProcessing = true;
-    download.status = 'downloading';
-    download.phase = 'preparing';
-    download.startedAt = this._now();
-    download.error = null;
-    // Assign the promise before notifying listeners, including a possible shutdown listener.
-    active.promise = Promise.resolve().then(() => this._run(active));
-    this.emit('download-started', clone(download));
+  /** Validate and append one complete batch before any of its downloaders can run. */
+  addBatch(urls, outputPath, options = {}) {
+    if (this._shuttingDown) throw new Error('The application is shutting down.');
+    if (!Array.isArray(urls) || urls.length < 1 || urls.length > MAX_QUEUE_ITEMS)
+      throw new Error('Add between 1 and 500 video URLs at a time.');
+    if (!isAbsoluteFilePath(outputPath)) throw new Error('Choose an absolute download folder.');
+    const normalizedOptions = normalizeOptions(options);
+    const uniqueUrls = new Map();
+    for (const input of urls) {
+      const url = validateUrl(input);
+      if (!uniqueUrls.has(resourceUrl(url))) uniqueUrls.set(resourceUrl(url), url);
+    }
+    if (this.queue.length + uniqueUrls.size > this._maxQueue)
+      throw new Error('The download queue is full.');
+    const usedIds = new Set([
+      ...this.queue.map((item) => item.id),
+      ...this.history.map((item) => item.id),
+      ...this._active.keys(),
+    ]);
+    const downloads = [...uniqueUrls.values()].map((url) => {
+      let id = this._idFactory();
+      // An injected factory must not collide with this batch, history or exiting children.
+      if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || usedIds.has(id)) {
+        do id = randomUUID();
+        while (usedIds.has(id));
+      }
+      usedIds.add(id);
+      return {
+        id,
+        url,
+        outputPath,
+        options: clone(normalizedOptions),
+        status: 'pending',
+        phase: 'pending',
+        progress: 0,
+        title: '',
+        addedAt: this._now(),
+        startedAt: null,
+        completedAt: null,
+        error: null,
+        filepath: null,
+      };
+    });
+    this.queue.push(...downloads);
     this._notify();
-    return active.promise;
+    this.processNext();
+    return downloads.map((download) => download.id);
+  }
+
+  setConcurrency(value, { start = true } = {}) {
+    if (!validConcurrency(value)) throw new Error('Choose between 1 and 5 concurrent downloads.');
+    if (this._shuttingDown) throw new Error('The application is shutting down.');
+    if (this.maxConcurrent !== value) {
+      this.maxConcurrent = value;
+      this._notify();
+    }
+    if (start) this.processNext();
+    return this.maxConcurrent;
+  }
+
+  _outputKey(download) {
+    const outputPath = path.resolve(download.outputPath);
+    return JSON.stringify([
+      resourceUrl(download.url),
+      process.platform === 'win32' ? outputPath.toLowerCase() : outputPath,
+    ]);
+  }
+
+  _syncActiveState() {
+    this.currentDownload = this._active.values().next().value?.download || null;
+    this.isProcessing = this._active.size > 0;
+  }
+
+  /** Exiting children occupy their slots and output keys until their promises settle. */
+  processNext() {
+    if (this._shuttingDown || this._scheduling) return;
+    this._scheduling = true;
+    try {
+      while (!this._shuttingDown && this._active.size < this.maxConcurrent) {
+        const outputKeys = new Set([...this._active.values()].map((active) => active.outputKey));
+        const download = this.queue.find(
+          (item) =>
+            item.status === 'pending' &&
+            !this._active.has(item.id) &&
+            !outputKeys.has(this._outputKey(item)),
+        );
+        if (!download) break;
+        const active = {
+          download,
+          outputKey: this._outputKey(download),
+          controller: new AbortController(),
+          intent: null,
+          promise: null,
+        };
+        this._active.set(download.id, active);
+        this._syncActiveState();
+        download.status = 'downloading';
+        download.phase = 'preparing';
+        download.startedAt = this._now();
+        download.error = null;
+        // Promise assignment precedes events so reentrant shutdown can wait for every child.
+        active.promise = Promise.resolve().then(() => this._run(active));
+        this.emit('download-started', clone(download));
+        this._notify();
+      }
+    } finally {
+      this._scheduling = false;
+    }
   }
 
   async _run(active) {
@@ -113,10 +191,9 @@ class DownloadQueue extends EventEmitter {
     } catch (error) {
       if (!active.intent) this._finish(download, 'failed', error?.message || 'Download failed.');
     } finally {
-      if (this._active === active) {
-        this._active = null;
-        this.currentDownload = null;
-        this.isProcessing = false;
+      if (this._active.get(download.id) === active) {
+        this._active.delete(download.id);
+        this._syncActiveState();
         this._notify();
         this.processNext();
       }
@@ -124,7 +201,12 @@ class DownloadQueue extends EventEmitter {
   }
 
   _progress(active, progress) {
-    if (this._active !== active || active.intent || !progress || typeof progress !== 'object')
+    if (
+      this._active.get(active.download.id) !== active ||
+      active.intent ||
+      !progress ||
+      typeof progress !== 'object'
+    )
       return;
     const download = active.download;
     if (Number.isFinite(progress.percent))
@@ -175,10 +257,11 @@ class DownloadQueue extends EventEmitter {
 
   cancelDownload(id) {
     const download = this.queue.find((item) => item.id === id);
-    if (!download) return false;
-    if (this._active?.download.id === id) {
-      this._active.intent = 'cancel';
-      this._active.controller.abort();
+    if (!download || this._shuttingDown) return false;
+    const active = this._active.get(id);
+    if (active) {
+      active.intent = 'cancel';
+      active.controller.abort();
     }
     // Record cancellation immediately so a crash cannot restart a cancelled job.
     this._finish(download, 'cancelled');
@@ -190,9 +273,10 @@ class DownloadQueue extends EventEmitter {
     const download = this.queue.find((item) => item.id === id);
     if (!download || !['pending', 'downloading'].includes(download.status) || this._shuttingDown)
       return false;
-    if (this._active?.download.id === id) {
-      this._active.intent = 'pause';
-      this._active.controller.abort();
+    const active = this._active.get(id);
+    if (active) {
+      active.intent = 'pause';
+      active.controller.abort();
     }
     download.status = 'paused';
     download.phase = 'paused';
@@ -224,7 +308,7 @@ class DownloadQueue extends EventEmitter {
     const index = this.queue.findIndex(
       (item) => item.id === id && ['pending', 'paused'].includes(item.status),
     );
-    if (index < 0 || this._active?.download.id === id) return false;
+    if (index < 0 || this._active.has(id)) return false;
     const [download] = this.queue.splice(index, 1);
     this.queue.splice(targetIndex, 0, download);
     this._notify();
@@ -260,6 +344,8 @@ class DownloadQueue extends EventEmitter {
       history: this.history,
       currentDownload: this.currentDownload,
       isProcessing: this.isProcessing,
+      activeIds: [...this._active.keys()],
+      maxConcurrent: this.maxConcurrent,
     });
   }
 
@@ -270,7 +356,7 @@ class DownloadQueue extends EventEmitter {
   }
 
   loadState(state, { start = true } = {}) {
-    if (this._active || this._shuttingDown)
+    if (this._active.size || this._shuttingDown)
       throw new Error('Cannot restore while the queue is running.');
     const restored = sanitizeQueueState(state, {
       maxQueue: this._maxQueue,
@@ -323,15 +409,19 @@ class DownloadQueue extends EventEmitter {
   shutdown() {
     if (this._shutdownPromise) return this._shutdownPromise;
     this._shuttingDown = true;
-    const active = this._active;
-    if (active && !active.intent) {
-      active.intent = 'shutdown';
-      active.download.status = 'pending';
-      active.download.phase = 'pending';
-      active.controller.abort();
+    const activeJobs = [...this._active.values()];
+    this._shutdownPromise = Promise.all(activeJobs.map((active) => active.promise)).then(() =>
+      this.getStateForSave(),
+    );
+    for (const active of activeJobs) {
+      if (!active.intent) {
+        active.intent = 'shutdown';
+        active.download.status = 'pending';
+        active.download.phase = 'pending';
+      }
     }
+    for (const active of activeJobs) active.controller.abort();
     this._notify();
-    this._shutdownPromise = Promise.resolve(active?.promise).then(() => this.getStateForSave());
     return this._shutdownPromise;
   }
 

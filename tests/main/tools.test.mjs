@@ -76,6 +76,58 @@ describe('resolved executable discovery', () => {
     const { service } = serviceWith({ 'C:\\Tools\\qjs.exe': 'QuickJS version 2023-12-1' });
     expect((await service.checkJsRuntimes()).every((runtime) => !runtime.available)).toBe(true);
   });
+  it('recognizes Bellard QuickJS help output despite its documented exit code 1', async () => {
+    const { service, execFile } = serviceWith({
+      'C:\\Tools\\qjs.exe': 'QuickJS version 2025-09-13',
+    });
+    execFile.mockRejectedValue(
+      Object.assign(new Error('Command failed'), {
+        code: 1,
+        killed: false,
+        signal: null,
+        stdout: 'QuickJS version 2025-09-13\nusage: qjs [options] [file [args]]\n',
+        stderr: '',
+      }),
+    );
+    expect(
+      (await service.checkJsRuntimes()).find((runtime) => runtime.name === 'quickjs'),
+    ).toMatchObject({
+      available: true,
+      version: '2025-09-13',
+    });
+  });
+  it.each([
+    { code: 2 },
+    { code: 1, killed: true },
+    { code: 1, signal: 'SIGTERM' },
+    { code: 'ABORT_ERR' },
+    { code: 1, stdout: 'unrecognized output' },
+  ])('does not accept an unsuccessful QuickJS probe: %j', async (failure) => {
+    const { service, execFile } = serviceWith({ 'C:\\Tools\\qjs.exe': 'available' });
+    execFile.mockRejectedValue(
+      Object.assign(new Error('Probe failed'), {
+        stdout: 'QuickJS version 2025-09-13',
+        ...failure,
+      }),
+    );
+    expect(
+      (await service.checkJsRuntimes()).find((runtime) => runtime.name === 'quickjs').available,
+    ).toBe(false);
+  });
+  it('still aborts discovery when QuickJS help races with cancellation', async () => {
+    const { service, execFile } = serviceWith({ 'C:\\Tools\\qjs.exe': 'available' });
+    const controller = new AbortController();
+    execFile.mockImplementation(async () => {
+      controller.abort();
+      throw Object.assign(new Error('Command failed'), {
+        code: 1,
+        stdout: 'QuickJS version 2025-09-13',
+      });
+    });
+    await expect(service.checkJsRuntimes({ signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
   it.each(['darwin', 'linux'])('supports %s and ffmpeg outside PATH', async (platform) => {
     const { service } = serviceWith({ '/app/ffmpeg': 'ffmpeg version 8.0 Copyright' }, platform);
     expect(await service.checkFfmpegAvailability()).toMatchObject({

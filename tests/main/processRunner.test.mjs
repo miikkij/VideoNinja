@@ -123,6 +123,27 @@ describe('child process lifecycle', () => {
     expect(kill).toHaveBeenCalledWith(-123, 'SIGKILL');
     expect(spawn.mock.calls[0][2].detached).toBe(true);
   });
+  it('terminates excessive combined stdout/stderr output and rejects after cleanup', async () => {
+    const child = childProcess();
+    const kill = vi.fn();
+    const lines = [];
+    const pending = createProcessRunner({ spawn: () => child, kill, platform: 'linux' }).runProcess(
+      '/bin/tool',
+      [],
+      {
+        maxOutputBytes: 12,
+        onStdoutLine: (line) => lines.push(line),
+        onStderrLine: (line) => lines.push(line),
+      },
+    );
+    child.stdout.emit('data', Buffer.from('first\n'));
+    child.stderr.emit('data', Buffer.from('too much\n'));
+    child.stdout.emit('data', Buffer.from('ignored\n'));
+    child.emit('close', null, 'SIGKILL');
+    await expect(pending).rejects.toThrow('output limit');
+    expect(kill).toHaveBeenCalledWith(-123, 'SIGKILL');
+    expect(lines).toEqual(['first']);
+  });
 });
 
 describe('native process boundary without media or network', () => {

@@ -10,7 +10,7 @@
     "build:mac": "electron-builder --mac --publish never",
     "build:win": "electron-builder --win --publish never",
     "build:linux": "electron-builder --linux --publish never",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "install-electron && electron-builder install-app-deps",
     "lint": "eslint src/ scripts/ tests/ *.mjs --max-warnings 0",
     "lint:fix": "eslint src/ scripts/ tests/ *.mjs --fix",
     "format": "prettier --write \"src/**/*.{js,css,html}\"",
