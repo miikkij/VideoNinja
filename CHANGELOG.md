@@ -2,7 +2,7 @@
 
 All notable changes to VideoNinja are recorded here.
 
-## [Unreleased] - 1.1.0
+## [1.1.0] - 2026-10-16
 
 ### Added
 
@@ -14,6 +14,7 @@ All notable changes to VideoNinja are recorded here.
 - Original audio, MP3, M4A, Opus and WAV selection.
 - Linux AppImage/Debian packaging and native three-platform CI.
 - Real Electron source/package smoke tests, local media fixtures and release artifact checks.
+- Four README screenshots with a repeatable capture script and isolated sample data.
 
 ### Changed
 
@@ -40,8 +41,9 @@ All notable changes to VideoNinja are recorded here.
 - Icon script paths, output sizes and missing/corrupt source failures.
 - Windows executable metadata/icon editing remains enabled without requiring signing.
 
-No public release has been created for this source change. Code signing,
-notarization and an automatic update channel are not configured.
+[Download VideoNinja 1.1.0](https://github.com/miikkij/VideoNinja/releases/tag/v1.1.0)
+for Windows x64, macOS ARM64 and Linux x64. Code signing, notarization and an
+automatic update channel are not configured.
 One moderate build-only dependency advisory remains without a published fix;
 see SECURITY.md.
 

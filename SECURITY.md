@@ -86,9 +86,10 @@ of undisclosed vulnerabilities.
 CI is configured to check Windows, macOS and Linux packages. A configured job is
 not evidence that a specific commit passed; review its actual results. The
 release workflow creates only a draft on matching version tags, and manual
-builds do not create a release. The version 1.1 implementation work has not
-published a public release. Code signing and macOS notarization are not configured,
-and there is no automatic application updater.
+builds do not create a release. Published packages are available through
+[GitHub Releases](https://github.com/miikkij/VideoNinja/releases).
+Version 1.1.0 packages are unsigned; code signing and macOS notarization are not
+configured, and there is no automatic application updater.
 
 ## Local data and authentication
 

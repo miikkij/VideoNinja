@@ -8,8 +8,20 @@ Choose a folder, paste video links and follow the queue in English or Finnish.
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) handles downloads; your settings and history
 stay on your computer.
 
-This README describes the **1.1.0 source**. Check [Releases](https://github.com/miikkij/VideoNinja/releases)
-for published binaries; a source version bump does not publish a release.
+## Download VideoNinja 1.1.0
+
+| Platform                          | Installer                                                                                                      | Alternative                                                                                                       |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Windows x64                       | [Windows installer](https://github.com/miikkij/VideoNinja/releases/download/v1.1.0/VideoNinja.Setup.1.1.0.exe) | [Portable EXE](https://github.com/miikkij/VideoNinja/releases/download/v1.1.0/VideoNinja.1.1.0.exe)               |
+| macOS 13+ · Apple Silicon (ARM64) | [macOS DMG](https://github.com/miikkij/VideoNinja/releases/download/v1.1.0/VideoNinja-1.1.0-arm64.dmg)         | [ZIP](https://github.com/miikkij/VideoNinja/releases/download/v1.1.0/VideoNinja-1.1.0-arm64-mac.zip)              |
+| Linux x64                         | [AppImage](https://github.com/miikkij/VideoNinja/releases/download/v1.1.0/VideoNinja-1.1.0.AppImage)           | [Debian / Ubuntu DEB](https://github.com/miikkij/VideoNinja/releases/download/v1.1.0/video-ninja_1.1.0_amd64.deb) |
+
+[Release notes](https://github.com/miikkij/VideoNinja/releases/tag/v1.1.0) ·
+[SHA-256 checksums](https://github.com/miikkij/VideoNinja/releases/download/v1.1.0/SHA256SUMS.txt)
+
+Packages are unsigned, and the macOS app is not notarized. This release does not
+include an Intel Mac build. Install the [download tools](#download-tools) separately,
+then follow the [quick start](QUICK_START.md) / [pikaohje](QUICK_START.fi.md).
 
 ## Screenshots
 
@@ -128,11 +140,11 @@ stops the app safely. Without a tray, closing exits.
 
 ## Packages and checks
 
-| Platform | Outputs                         | Current build architecture |
+| Platform | Outputs                         | 1.1.0 release architecture |
 | -------- | ------------------------------- | -------------------------- |
 | Windows  | NSIS installer and portable EXE | x64                        |
-| macOS    | DMG and ZIP                     | Native runner architecture |
-| Linux    | AppImage and Debian package     | Native runner architecture |
+| macOS    | DMG and ZIP                     | ARM64 (Apple Silicon)      |
+| Linux    | AppImage and Debian package     | x64 / amd64                |
 
 Build on the target operating system with `pnpm build:win`, `pnpm build:mac`
 or `pnpm build:linux`. Builds never publish automatically.

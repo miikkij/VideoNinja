@@ -1,5 +1,10 @@
 # VideoNinjan pikaohje
 
+Lataa käyttöjärjestelmällesi sopiva paketti
+[VideoNinja 1.1.0:n latauslinkeistä](README.md#download-videoninja-110).
+macOS-paketti on Apple Silicon -koneille. Paketit ovat allekirjoittamattomia,
+eikä macOS-sovellusta ole notarisoitu.
+
 ## Valmistelu
 
 Asenna erikseen [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation),

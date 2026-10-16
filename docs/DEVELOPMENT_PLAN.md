@@ -135,7 +135,9 @@ ulkopuolisten tekijöiden mediaa tai käytä henkilökohtaisia evästeitä.
 
 ## Julkaisun rajaukset ja ylläpito
 
-Julkista 1.1.0-julkaisua tai tagia ei tehdä tämän lähdekoodimuutoksen perusteella.
+VideoNinja 1.1.0:n julkaisupäivä on 16.10.2026.
+[Julkaisu ja lataukset](https://github.com/miikkij/VideoNinja/releases/tag/v1.1.0)
+kattavat Windows x64:n, macOS ARM64:n ja Linux x64:n.
 Allekirjoitusvarmenteet, macOS-notarisointi ja automaattinen päivityskanava
 tarvitsevat ylläpitäjän jakelu- ja kustannuspäätökset. Nykyiset paketit ovat
 allekirjoittamattomia. CI:n DMG-mount ja Debian-purku eivät todenna kaikkien

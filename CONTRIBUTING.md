@@ -171,9 +171,10 @@ Before publishing a release:
 5. Review the generated artifacts and signing/notarization status before
    publishing the draft.
 
-Code signing and macOS notarization are not configured. The version 1.1
-implementation work does not itself publish a release or establish signed
-distribution. There is no automatic application updater.
+Code signing and macOS notarization are not configured. Version 1.1.0 is
+distributed as unsigned Windows x64, macOS ARM64 and Linux x64 packages through
+[GitHub Releases](https://github.com/miikkij/VideoNinja/releases/tag/v1.1.0).
+There is no automatic application updater.
 
 ## Artwork maintenance
 

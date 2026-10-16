@@ -2,6 +2,10 @@
 
 [Suomeksi](QUICK_START.fi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
+Download the package for your operating system from
+[VideoNinja 1.1.0 downloads](README.md#download-videoninja-110).
+The macOS package is for Apple Silicon. Packages are unsigned; macOS is not notarized.
+
 ## 1. Install the tools
 
 Install [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation),
