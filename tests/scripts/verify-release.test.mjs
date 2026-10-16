@@ -105,11 +105,22 @@ describe('release verifier', () => {
     return { names, manifest, manifestFile, resources, publish, policy };
   }
 
-  function runVersion(env = {}) {
+  function runVersion(env = {}, throughDirectoryLink = false) {
     const filename = path.join(fixture, 'scripts', 'verify-release.mjs');
     fs.mkdirSync(path.dirname(filename), { recursive: true });
     fs.copyFileSync(source, filename);
-    return spawnSync(process.execPath, [filename], {
+    let entry = filename;
+    if (throughDirectoryLink) {
+      const link = path.join(fixture, 'linked-scripts');
+      if (!fs.existsSync(link))
+        fs.symlinkSync(
+          path.dirname(filename),
+          link,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      entry = path.join(link, path.basename(filename));
+    }
+    return spawnSync(process.execPath, [entry], {
       cwd: fixture,
       env: { ...process.env, GITHUB_REF_TYPE: '', GITHUB_REF_NAME: '', RELEASE_TAG: '', ...env },
       encoding: 'utf8',
@@ -124,6 +135,15 @@ describe('release verifier', () => {
     expect(runVersion({ GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: `v${version}` }).status).toBe(0);
     expect(runVersion({ RELEASE_TAG: `v${version}` }).status).toBe(0);
     const wrong = runVersion({ RELEASE_TAG: 'v1.2.4' });
+    expect(wrong.status).toBe(1);
+    expect(wrong.stderr).toContain(`Release tag must be v${version}`);
+  });
+
+  it('executes the CLI and rejects a wrong tag when its entry directory is a symlink or junction', () => {
+    const valid = runVersion({}, true);
+    expect(valid.status).toBe(0);
+    expect(valid.stdout).toContain(`Release metadata verified for ${version}.`);
+    const wrong = runVersion({ RELEASE_TAG: 'v1.2.4' }, true);
     expect(wrong.status).toBe(1);
     expect(wrong.stderr).toContain(`Release tag must be v${version}`);
   });

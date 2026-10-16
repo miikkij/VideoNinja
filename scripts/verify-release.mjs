@@ -236,7 +236,12 @@ export async function verifyRelease({
   return pkg.version;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === script) {
+// Node resolves module URLs through symlinks, while argv retains the launch path.
+if (
+  process.argv[1] &&
+  fs.existsSync(process.argv[1]) &&
+  fs.realpathSync(process.argv[1]) === fs.realpathSync(script)
+) {
   const artifacts = process.argv.includes('--artifacts');
   const version = await verifyRelease({ artifacts });
   console.log(
