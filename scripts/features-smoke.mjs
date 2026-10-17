@@ -43,6 +43,9 @@ await fs.writeFile(
       downloadPath: downloads,
       language: 'en',
       checkUpdatesOnStartup: false,
+      // Make the saved preference deterministic even when CI has managed Stable
+      // tools. Existing tool-channel inference must not override this setting.
+      ytdlpChannel: 'nightly',
       autoToolUpdates: false,
     },
     siteCompatibility: [
