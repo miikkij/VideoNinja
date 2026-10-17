@@ -401,7 +401,7 @@
     probeAvailable: 'Media verification is available.',
     probeMissing: 'Media verification is unavailable. Install ffmpeg with ffprobe to enable it.',
     error_TOOLS_BUSY:
-      'Finish or remove queued downloads and close previews before changing download tools.',
+      'Pause every queued download yourself, wait for active work to stop, and close previews before changing tools. Jobs paused only by a schedule must also be paused manually.',
     error_TOOLS_UNAVAILABLE:
       'Tool management is unavailable for this installation. Use the setup links.',
     error_TOOL_OPERATION_FAILED:
@@ -595,7 +595,7 @@
     probeMissing:
       'Median tarkistus ei ole käytettävissä. Asenna ffmpeg ja ffprobe sen käyttöönottamiseksi.',
     error_TOOLS_BUSY:
-      'Anna latausten valmistua tai poista ne jonosta ja sulje esikatselut ennen lataustyökalujen muuttamista.',
+      'Keskeytä kaikki jonon lataukset itse, odota aktiivisen työn pysähtymistä ja sulje esikatselut ennen työkalujen muuttamista. Myös vain ajastuksen keskeyttämät työt on keskeytettävä käsin.',
     error_TOOLS_UNAVAILABLE:
       'Työkalujen hallinta ei ole käytettävissä tässä asennuksessa. Käytä asennuslinkkejä.',
     error_TOOL_OPERATION_FAILED:
@@ -785,6 +785,99 @@
     personality_completed: '🎊 Lataus valmis!',
     personality_failed: '⚠️ Lataus epäonnistui',
     cameraFlash: 'RÄPS!',
+  });
+  Object.assign(messages.en, {
+    toolChannel: 'Release channel',
+    savedOptionsHeading: 'Review saved download options',
+    retryReviewDescription: 'Review these options to continue this saved download in the queue.',
+    remedy_OPTIONS_REVIEW:
+      'Some options saved by an earlier version are no longer supported. This download is kept for review. Open Retry with options before continuing.',
+    savedCompletedOptionsHelp:
+      'This completed download is preserved. Some old options are no longer supported; the saved file can still be opened.',
+    savedOptionsReviewHelp:
+      'Review authentication, runtime and network choices before retrying. Unsupported saved options were removed; compatible quality, format, subtitle and speed choices were retained. Cookies are not selected automatically.',
+    toolStable: 'Stable',
+    toolNightly: 'Nightly',
+    toolChannelHint:
+      'Start with Stable. Nightly includes newer website fixes and may be less tested. Select a channel, then Install or Update. Switching back to Stable is supported.',
+    toolOldRelease:
+      'This yt-dlp release is {days} days old. Website changes may require a newer version. Use Update below if a supported link fails.',
+    remedy_ACCESS:
+      'The source could not confirm access. This message can mean login is needed, the content is unavailable, or access is temporarily limited; it does not confirm a rate limit.',
+    remedy_COOKIE_ACCESS:
+      'The selected cookies could not be read or decrypted. Check the cookie source before retrying; this does not mean the video was removed.',
+    remedy_EXTRACTOR:
+      'yt-dlp could not read the website response. Update yt-dlp to get recent website fixes, then retry.',
+    fixAccess: 'Check access and retry options',
+    fixCookies: 'Check cookie access',
+    fixExtractor: 'Show yt-dlp updates',
+    showToolUpdates: 'Show yt-dlp updates',
+    retryGuidanceHeading: 'Before retrying',
+    accessBrowserHelp:
+      'Copy the source link and open it in your browser while signed in. Confirm that the video plays for your account. If it is unavailable there too, changing download options will not restore access.',
+    accessCookiesHelp:
+      'If the video plays in the browser but needs a login, choose that browser below, or choose a Netscape cookie file exported from the signed-in session. Review the selection yourself before retrying.',
+    extractorUpdateHelp:
+      'If the link works in the browser, update yt-dlp from Settings. Try the latest Stable release first; Nightly can contain newer website fixes. After updating, return to the failed download and retry.',
+    cookieLockHelp:
+      'For a cookie database copy or permission error, fully close the selected browser, including background processes, and retry with the same cookie source.',
+    cookieDecryptHelp:
+      'On Windows, Chrome or Edge cookie encryption can still prevent access after the browser is closed. Export a Netscape cookie file from your signed-in session, or use Firefox if the video plays there. Do not disable browser security.',
+    cookieFileHelp:
+      'Choose a cookies.txt file exported from your signed-in session in Mozilla/Netscape format, not JSON. Export only the site you need and keep the file private; it can grant account access.',
+    cookieChromiumHelp:
+      'Use the browser where the video plays while signed in. Close it fully if the cookie database is locked. Windows encryption may still block reading; use a Netscape cookie file or a signed-in Firefox session instead.',
+    cookieBrowserHelp:
+      'Use the browser profile where you are signed in and the video plays. If cookies cannot be read, choose a Netscape cookie file exported from that session.',
+    cookieNoneHelp:
+      'No account cookies will be sent. If the site requires a login, first check the link in your signed-in browser, then select that browser or an exported Netscape cookie file.',
+  });
+  Object.assign(messages.fi, {
+    toolChannel: 'Julkaisukanava',
+    savedOptionsHeading: 'Tarkista tallennetut latausvalinnat',
+    retryReviewDescription:
+      'Tarkista nämä valinnat jatkaaksesi tätä tallennettua latausta jonossa.',
+    remedy_OPTIONS_REVIEW:
+      'Osa aiemman version tallentamista valinnoista ei ole enää tuettuja. Lataus on säilytetty tarkistusta varten. Tarkista valinnat uudelleenyrityksen näkymässä ennen jatkamista.',
+    savedCompletedOptionsHelp:
+      'Tämä valmis lataus on säilytetty. Osa vanhoista valinnoista ei ole enää tuettuja; tallennetun tiedoston voi edelleen avata.',
+    savedOptionsReviewHelp:
+      'Tarkista kirjautuminen, JavaScript-ajoalusta ja verkkovalinnat ennen uutta yritystä. Valinnat, joita ei enää tueta, on poistettu. Yhteensopivat laatu-, muoto-, tekstitys- ja nopeusvalinnat säilyivät. Evästeitä ei valita automaattisesti.',
+    toolStable: 'Vakaa (Stable)',
+    toolNightly: 'Kehitysversio (Nightly)',
+    toolChannelHint:
+      'Aloita vakaasta versiosta. Nightly sisältää uudempia sivustokorjauksia ja voi olla vähemmän testattu. Valitse kanava ja sitten Asenna tai Päivitä. Voit myös palata vakaaseen versioon.',
+    toolOldRelease:
+      'Tämä yt-dlp-julkaisu on {days} päivää vanha. Sivustojen muutokset voivat vaatia uudemman version. Päivitä alla, jos tuettu linkki ei toimi.',
+    remedy_ACCESS:
+      'Lähde ei vahvistanut pääsyä sisältöön. Viesti voi tarkoittaa kirjautumistarvetta, sisällön puuttumista tai tilapäistä rajoitusta; se ei vahvista latausmäärän rajoitusta.',
+    remedy_COOKIE_ACCESS:
+      'Valittuja evästeitä ei voitu lukea tai purkaa. Tarkista evästelähde ennen uutta yritystä. Tämä ei tarkoita, että video olisi poistettu.',
+    remedy_EXTRACTOR:
+      'yt-dlp ei pystynyt lukemaan sivuston vastausta. Päivitä yt-dlp saadaksesi tuoreet sivustokorjaukset ja yritä sitten uudelleen.',
+    fixAccess: 'Tarkista pääsy ja uusinnan valinnat',
+    fixCookies: 'Tarkista evästeiden luku',
+    fixExtractor: 'Näytä yt-dlp-päivitykset',
+    showToolUpdates: 'Näytä yt-dlp-päivitykset',
+    retryGuidanceHeading: 'Ennen uutta yritystä',
+    accessBrowserHelp:
+      'Kopioi lähdelinkki ja avaa se selaimessa kirjautuneena. Varmista, että video toistuu tililläsi. Jos se ei ole saatavilla selaimessakaan, latausvalintojen muuttaminen ei palauta pääsyä.',
+    accessCookiesHelp:
+      'Jos video toistuu selaimessa mutta vaatii kirjautumisen, valitse kyseinen selain alta tai kirjautuneesta istunnosta viety Netscape-evästetiedosto. Tarkista valinta itse ennen uutta yritystä.',
+    extractorUpdateHelp:
+      'Jos linkki toimii selaimessa, päivitä yt-dlp asetuksista. Kokeile ensin uusinta vakaata versiota; Nightly voi sisältää uudempia sivustokorjauksia. Palaa päivityksen jälkeen epäonnistuneeseen lataukseen ja yritä uudelleen.',
+    cookieLockHelp:
+      'Jos evästetietokannan kopiointi tai käyttöoikeus epäonnistui, sulje valittu selain kokonaan taustaprosesseineen ja yritä samalla evästelähteellä uudelleen.',
+    cookieDecryptHelp:
+      'Windowsissa Chromen tai Edgen evästesalaus voi estää lukemisen selaimen sulkemisen jälkeenkin. Vie kirjautuneesta istunnosta Netscape-evästetiedosto tai käytä Firefoxia, jos video toistuu siinä. Älä poista selaimen suojauksia käytöstä.',
+    cookieFileHelp:
+      'Valitse kirjautuneesta istunnosta viety cookies.txt-tiedosto Mozilla/Netscape-muodossa, ei JSON-muodossa. Vie vain tarvitsemasi sivuston evästeet ja pidä tiedosto yksityisenä: sillä voi päästä tilillesi.',
+    cookieChromiumHelp:
+      'Käytä selainta, jossa video toistuu kirjautuneena. Sulje selain kokonaan, jos evästetietokanta on lukittu. Windowsin salaus voi silti estää lukemisen; käytä Netscape-evästetiedostoa tai kirjautunutta Firefox-istuntoa.',
+    cookieBrowserHelp:
+      'Käytä selainprofiilia, jossa olet kirjautunut ja video toistuu. Jos evästeitä ei voi lukea, valitse tästä istunnosta viety Netscape-evästetiedosto.',
+    cookieNoneHelp:
+      'Tilin evästeitä ei lähetetä. Jos sivusto vaatii kirjautumisen, tarkista linkki ensin kirjautuneena selaimessa ja valitse sitten kyseinen selain tai viety Netscape-evästetiedosto.',
   });
   let language = 'en';
   function t(key, values = {}) {

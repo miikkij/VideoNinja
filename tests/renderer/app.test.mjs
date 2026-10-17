@@ -1298,6 +1298,187 @@ describe('production renderer', () => {
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
 
+  it.each(['en', 'fi'])(
+    'distinguishes ambiguous access from rate limiting and guides an explicit retry in %s',
+    async (language) => {
+      const { api } = await boot({
+        settings: { language, downloadPath: '/downloads' },
+        queue: {
+          queue: [],
+          history: [
+            job('access', 'failed', {
+              errorCode: 'access',
+              error: 'Requested content is not available, rate-limit reached or login required',
+            }),
+            job('limited', 'failed', { errorCode: 'rate-limit', error: 'HTTP Error 429' }),
+          ],
+        },
+      });
+      const t = window.VideoNinjaI18n.t;
+      const access = document.querySelector('[data-id="access"] .error-area');
+      const limited = document.querySelector('[data-id="limited"] .error-area');
+      expect(access.querySelector('.hint').textContent).toBe(t('remedy_ACCESS'));
+      expect(limited.querySelector('.hint').textContent).toBe(t('remedy_RATE_LIMIT'));
+      access.querySelector('button').click();
+      expect($('retry-guidance').hidden).toBe(false);
+      expect($('retry-guidance').textContent).toContain(t('accessBrowserHelp'));
+      expect($('retry-cookie-source').value).toBe('');
+      expect(document.activeElement).toBe($('retry-cookie-source'));
+      expect(api.retryDownload).not.toHaveBeenCalled();
+      expect(api.saveSettings).not.toHaveBeenCalled();
+      $('retry-copy-source').click();
+      await vi.waitFor(() =>
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://example.com/access'),
+      );
+      $('retry-update-tools').click();
+      expect($('retry-dialog').open).toBe(false);
+      expect($('settings-panel').hidden).toBe(false);
+      expect(document.activeElement).toBe($('ytdlp-channel'));
+      expect(api.toolAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('explains cookie locks and encryption without silently clearing authentication', async () => {
+    const { api } = await boot({
+      queue: {
+        queue: [],
+        history: [
+          job('cookies', 'failed', {
+            errorCode: 'cookie-access',
+            error: 'Failed to decrypt with DPAPI',
+            options: { quality: '720', cookiesFromBrowser: 'chrome' },
+          }),
+        ],
+      },
+    });
+    document.querySelector('[data-id="cookies"] .error-area button').click();
+    expect($('retry-cookie-source').value).toBe('chrome');
+    expect($('retry-guidance').textContent).toContain(window.VideoNinjaI18n.t('cookieDecryptHelp'));
+    expect($('retry-cookie-help').textContent).toContain('Windows encryption');
+    expect(api.retryDownload).not.toHaveBeenCalled();
+    $('retry-cookie-source').value = 'file';
+    $('retry-cookie-source').dispatchEvent(new Event('change'));
+    expect($('retry-cookie-help').textContent).toContain('Mozilla/Netscape');
+    api.chooseCookieFile.mockResolvedValue(ok('/session-cookies.txt'));
+    $('retry-choose-cookie').click();
+    await vi.waitFor(() => expect($('retry-cookie-file').value).toBe('/session-cookies.txt'));
+    $('retry-form').requestSubmit();
+    await vi.waitFor(() =>
+      expect(api.retryDownload).toHaveBeenCalledWith({
+        id: 'cookies',
+        options: { quality: '720', cookieFile: '/session-cookies.txt', subtitles: false },
+      }),
+    );
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('opens extractor updates and sends the chosen channel only after an explicit update', async () => {
+    const { api } = await boot({
+      tools: { ...goodTools, ytdlp: { ...goodTools.ytdlp, stale: true, ageDays: 145 } },
+      queue: {
+        queue: [],
+        history: [
+          job('extractor', 'failed', {
+            errorCode: 'extractor',
+            error: 'Unable to extract response',
+          }),
+        ],
+      },
+    });
+    document.querySelector('[data-id="extractor"] .error-area button').click();
+    expect($('settings-panel').hidden).toBe(false);
+    expect($('ytdlp-age-warning').textContent).toContain('145');
+    expect(document.activeElement).toBe($('ytdlp-channel'));
+    expect($('ytdlp-channel').value).toBe('stable');
+    expect(api.toolAction).not.toHaveBeenCalled();
+    api.toolAction.mockResolvedValue(
+      ok({ tools: goodTools, result: { status: 'installed', tool: 'yt-dlp', version: 'new' } }),
+    );
+    const update = document.querySelector('[data-tool="yt-dlp"][data-tool-action="update"]');
+    update.click();
+    await vi.waitFor(() =>
+      expect(api.toolAction).toHaveBeenCalledWith({
+        tool: 'yt-dlp',
+        action: 'update',
+        channel: 'stable',
+      }),
+    );
+    await vi.waitFor(() => expect(update.disabled).toBe(false));
+    expect($('ytdlp-age-warning').hidden).toBe(true);
+    $('ytdlp-channel').value = 'nightly';
+    $('ytdlp-channel').dispatchEvent(new Event('change'));
+    expect(api.toolAction).toHaveBeenCalledTimes(1);
+    update.click();
+    await vi.waitFor(() =>
+      expect(api.toolAction).toHaveBeenLastCalledWith({
+        tool: 'yt-dlp',
+        action: 'update',
+        channel: 'nightly',
+      }),
+    );
+    expect(api.retryDownload).not.toHaveBeenCalled();
+  });
+
+  it('keeps cookie source guidance consistent in settings and per-download overrides', async () => {
+    await boot();
+    $('cookie-source').value = 'chrome';
+    $('cookie-source').dispatchEvent(new Event('change'));
+    expect($('cookie-help').textContent).toContain('Windows encryption');
+    expect($('download-cookie-help').textContent).toBe($('cookie-help').textContent);
+    $('download-cookie-source').value = 'file';
+    $('download-cookie-source').dispatchEvent(new Event('change'));
+    expect($('download-cookie-help').textContent).toContain('Mozilla/Netscape');
+    expect($('cookie-source').value).toBe('chrome');
+  });
+
+  it('keeps migrated jobs visible but requires option review before resuming or retrying them', async () => {
+    const { api } = await boot({
+      settings: { language: 'fi', downloadPath: '/downloads', cookieSource: 'chrome' },
+      queue: {
+        queue: [
+          job('review', 'paused', { optionsNeedReview: true, errorCode: 'options-review' }),
+          job('normal', 'paused'),
+        ],
+        history: [
+          job('done-review', 'completed', { optionsNeedReview: true }),
+          job('failed-review', 'failed', { optionsNeedReview: true }),
+        ],
+      },
+    });
+    const row = document.querySelector('[data-id="review"]');
+    expect(row.querySelector('[data-action="resume"]')).toBeNull();
+    expect(row.querySelector('[data-action="quickRetry"]')).toBeNull();
+    expect(row.querySelector('.error-area').hidden).toBe(false);
+    const completed = document.querySelector('[data-id="done-review"]');
+    expect(completed.querySelector('[data-action="openFile"]')).not.toBeNull();
+    expect(completed.querySelector('[data-action="retryOptions"]')).toBeNull();
+    expect(completed.textContent).toContain(window.VideoNinjaI18n.t('savedCompletedOptionsHelp'));
+    expect(
+      document.querySelector('[data-id="failed-review"] [data-action="quickRetry"]'),
+    ).toBeNull();
+    $('queue-select-all').click();
+    document.querySelector('[data-queue-action="resume"]').click();
+    await vi.waitFor(() =>
+      expect(api.queueAction).toHaveBeenCalledWith({ action: 'resume', ids: ['normal'] }),
+    );
+    row.querySelector('[data-action="retryOptions"]').click();
+    expect($('retry-description').textContent).toBe(
+      window.VideoNinjaI18n.t('retryReviewDescription'),
+    );
+    expect($('retry-guidance').textContent).toContain(
+      window.VideoNinjaI18n.t('savedOptionsReviewHelp'),
+    );
+    expect($('retry-cookie-source').value).toBe('');
+    expect(api.retryDownload).not.toHaveBeenCalled();
+    $('retry-form').requestSubmit();
+    await vi.waitFor(() =>
+      expect(api.retryDownload).toHaveBeenCalledWith({
+        id: 'review',
+        options: { quality: '1080', subtitles: false },
+      }),
+    );
+  });
+
   it('distinguishes scheduled pauses and duplicate skips from failures with usable actions', async () => {
     const { api } = await boot({
       queue: {

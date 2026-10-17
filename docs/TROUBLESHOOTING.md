@@ -18,10 +18,17 @@ profile or partial downloads to clear a warning.
 
 ## Missing tools, installation or updates
 
-In Settings, review paths/versions and install or update the managed tool. The
-queue must be empty, including paused jobs, and previews closed. Finish or remove
-queued jobs first; pausing alone does not satisfy that condition. Tool changes
+In Settings, review paths/versions and install or update the managed tool. Pause
+queued jobs manually and close previews, then wait for their processes to stop.
+Paused jobs remain in the queue. Jobs paused by the schedule must also be paused
+manually because the schedule could otherwise resume them. Tool changes
 are explicit and do not upgrade global package-manager installations.
+
+Updating VideoNinja does not update a globally installed yt-dlp. A build older
+than 90 days now displays a warning. Select Stable or Nightly in the yt-dlp card
+and update the managed copy. Upstream recommends Nightly for current site fixes.
+For service-specific requirements and authentication, see the
+[service guide](USER_GUIDE.md).
 
 Managed yt-dlp and Deno support Windows/Linux/macOS x64/ARM64. ffmpeg/ffprobe are
 managed on Windows/Linux; macOS shows guided installation, normally
@@ -79,6 +86,18 @@ Defaults are two retries with an initial 15-second delay; the maximum is five
 retries and backoff is capped at 15 minutes. Authentication, unavailable content,
 invalid formats and missing tools need correction. Use **Retry with options**
 when the saved job contains outdated settings. Manual retry creates a new attempt.
+
+Instagram's "not available, rate-limit reached or login required" message does
+not identify a single cause. VideoNinja shows access guidance and stops automatic
+retries for this message. Update yt-dlp, check the link in a browser, then use the
+explicit cookie settings if the service requires your login. A confirmed HTTP 429
+still uses the bounded retry policy. Browser cookie-copy/decryption failures have
+their own guidance and do not become repeated network retries.
+
+Saved jobs with unsupported legacy options are retained for review. Completed
+history keeps its file links. Pending jobs stay paused until **Retry with options**
+submits valid settings; that action keeps the same queue slot. Resume and bulk
+retry cannot silently run a job after its old authentication/options were removed.
 
 The watchdog requires actual byte/percentage advancement or a phase change.
 Repeated status messages alone do not reset it. Defaults are 180 seconds during

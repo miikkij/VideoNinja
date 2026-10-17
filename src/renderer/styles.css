@@ -709,6 +709,19 @@ dialog::backdrop {
 .setup-guidance button {
   margin: 0.3rem 0.5rem 0 0;
 }
+#retry-guidance {
+  margin: 1rem 0;
+}
+#retry-guidance p,
+#retry-guidance li {
+  margin-top: 0.5rem;
+}
+#retry-guidance ol {
+  padding-inline-start: 1.5rem;
+}
+#ytdlp-age-warning {
+  color: var(--error-ink);
+}
 .setup-command,
 .release-notes {
   white-space: pre-wrap;

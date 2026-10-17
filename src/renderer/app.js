@@ -71,6 +71,7 @@
   let saveRevision = 0;
   let settingsSaved = true;
   let retryId = null;
+  let retryDownload = null;
   let retryOpener = null;
   let previewRevision = 0;
   let playlistRevision = 0;
@@ -244,6 +245,10 @@
   }
   function renderTools() {
     toolSetup = tools.setup || toolSetup;
+    $('ytdlp-age-warning').hidden = !tools.ytdlp?.stale;
+    $('ytdlp-age-warning').textContent = tools.ytdlp?.stale
+      ? t('toolOldRelease', { days: tools.ytdlp.ageDays })
+      : '';
     for (const name of ['ytdlp', 'ffmpeg']) {
       const tool = tools[name];
       $(`${name}-status`).textContent = !tool
@@ -286,6 +291,7 @@
     $('tool-help').open = Boolean(
       tools.ytdlp && (!tools.ytdlp.available || !tools.ffmpeg?.available),
     );
+    $('ytdlp-channel').disabled = !initialized || toolBusy;
     renderReadiness();
   }
   function renderReadiness() {
@@ -343,6 +349,8 @@
     renderDisk();
     renderQueue();
     renderPlaylistSelection();
+    renderCookieHelp();
+    renderRetryGuidance();
     if (metadataFormats.length) {
       const selected = $('format-select').value,
         audio = $('format-audio').value;
@@ -416,6 +424,57 @@
       return { cookieFile: file };
     }
     return source ? { cookiesFromBrowser: source } : {};
+  }
+  function renderCookieHelp() {
+    for (const [select, hint] of [
+      ['cookie-source', 'cookie-help'],
+      ['download-cookie-source', 'download-cookie-help'],
+      ['retry-cookie-source', 'retry-cookie-help'],
+    ]) {
+      const source = $(select).value === 'default' ? settings.cookieSource || '' : $(select).value;
+      const key =
+        source === 'file'
+          ? 'cookieFileHelp'
+          : ['chrome', 'edge', 'brave', 'opera', 'chromium', 'vivaldi'].includes(source)
+            ? 'cookieChromiumHelp'
+            : source
+              ? 'cookieBrowserHelp'
+              : 'cookieNoneHelp';
+      $(hint).textContent = t(key);
+    }
+  }
+  function renderRetryGuidance() {
+    const code = retryDownload?.optionsNeedReview
+      ? 'options-review'
+      : String(retryDownload?.errorCode || '').toLowerCase();
+    $('retry-description').textContent = t(
+      code === 'options-review' && retryDownload.status === 'paused'
+        ? 'retryReviewDescription'
+        : 'retryDescription',
+    );
+    const supported = ['auth', 'access', 'cookie-access', 'extractor', 'options-review'].includes(
+      code,
+    );
+    $('retry-guidance').hidden = !supported;
+    $('retry-guidance-steps').replaceChildren();
+    if (!supported) return;
+    $('retry-guidance-message').textContent = t(jobRemedy(retryDownload).message);
+    const steps =
+      code === 'options-review'
+        ? ['savedOptionsReviewHelp']
+        : code === 'extractor'
+          ? ['extractorUpdateHelp', 'accessBrowserHelp']
+          : code === 'cookie-access'
+            ? ['cookieLockHelp', 'cookieDecryptHelp', 'cookieFileHelp']
+            : ['accessBrowserHelp', 'accessCookiesHelp', 'extractorUpdateHelp'];
+    for (const key of steps) create('li', '', $('retry-guidance-steps')).textContent = t(key);
+    $('retry-update-tools').hidden = ['cookie-access', 'options-review'].includes(code);
+  }
+  function showToolUpdates() {
+    if ($('retry-dialog').open) closeRetry();
+    openSettings(true);
+    $('ytdlp-tools').scrollIntoView?.({ block: 'center' });
+    $('ytdlp-channel').focus();
   }
   function downloadOptions({ includeFormat = true } = {}) {
     const source =
@@ -582,6 +641,7 @@
     applySettings();
     $('audio-format').value = options.audioFormat || 'original';
     $('download-cookie-source').value = 'default';
+    renderCookieHelp();
     $('download-rate').value = String(options.rateLimitKbps || 0);
     $('subtitles').checked = Boolean(options.subtitles);
     $('subtitle-lang').value = options.subtitleLang || 'en';
@@ -785,7 +845,10 @@
     $('tool-action-status').textContent = t('toolWorking', { tool });
     renderTools();
     try {
-      const result = await request('toolAction', { tool, action: actionName });
+      const input = { tool, action: actionName };
+      if (tool === 'yt-dlp' && ['install', 'update'].includes(actionName))
+        input.channel = $('ytdlp-channel').value;
+      const result = await request('toolAction', input);
       tools = result.tools || tools;
       toolSetup = result.setup || toolSetup;
       toolDiagnostics = result.result?.ejs ? result.result : null;
@@ -871,10 +934,13 @@
     if (download.status === 'completed') return ['openFile', 'showFolder'];
     if (download.status === 'skipped') return ['reviewDuplicates'];
     if (download.status === 'failed' || download.status === 'cancelled')
-      return ['quickRetry', 'retryOptions'];
+      return download.optionsNeedReview ? ['retryOptions'] : ['quickRetry', 'retryOptions'];
     if (download.status === 'downloading') return ['pause', 'cancel'];
     if (download.status === 'pending' || download.status === 'paused') {
-      const actions = download.status === 'paused' ? ['resume', 'cancel'] : ['pause', 'cancel'];
+      const actions =
+        download.status === 'paused'
+          ? [download.optionsNeedReview ? 'retryOptions' : 'resume', 'cancel']
+          : ['pause', 'cancel'];
       if (list.length > 1) actions.push('moveUp', 'moveDown');
       return actions;
     }
@@ -994,14 +1060,18 @@
     row.progress.value = progress;
     row.progress.setAttribute('aria-label', t('actionFor', { action: t('downloading'), title }));
     row.percent.textContent = `${Math.round(progress)}%`;
-    row.errorArea.hidden = !download.error;
-    row.errorTitle.textContent = t('errorDetails');
+    row.errorArea.hidden = !download.error && !download.optionsNeedReview;
+    row.errorTitle.textContent = t(
+      download.optionsNeedReview ? 'savedOptionsHeading' : 'errorDetails',
+    );
     row.errorDetail.textContent = download.error || '';
+    row.errorDetail.hidden = !download.error;
     const remedy = jobRemedy(download);
     row.errorNext.textContent = t(remedy?.message || 'errorNext');
     row.remedy.hidden = !remedy?.action;
     row.remedy.textContent = remedy?.action ? t(remedy.action) : '';
     row.copy.textContent = t('copyError');
+    row.copy.hidden = !download.error;
     const actions = desiredActions(download, list);
     for (const [name, button] of row.buttons) {
       if (!actions.includes(name)) {
@@ -1088,9 +1158,19 @@
     renderAppUpdate();
   }
   function jobRemedy(download) {
+    if (download.optionsNeedReview)
+      return {
+        message:
+          download.status === 'completed' ? 'savedCompletedOptionsHelp' : 'remedy_OPTIONS_REVIEW',
+        action: ['paused', 'failed', 'cancelled'].includes(download.status) ? 'retryOptions' : null,
+      };
     const code = String(download.errorCode || '').toLowerCase();
     return {
+      'options-review': { message: 'remedy_OPTIONS_REVIEW', action: 'retryOptions' },
       auth: { message: 'remedy_AUTH', action: 'fixAuthentication' },
+      access: { message: 'remedy_ACCESS', action: 'fixAccess' },
+      'cookie-access': { message: 'remedy_COOKIE_ACCESS', action: 'fixCookies' },
+      extractor: { message: 'remedy_EXTRACTOR', action: 'fixExtractor' },
       network: { message: 'remedy_NETWORK', action: 'quickRetry' },
       'rate-limit': { message: 'remedy_RATE_LIMIT', action: 'fixLimits' },
       'tool-missing': { message: 'remedy_TOOL', action: 'fixTools' },
@@ -1110,9 +1190,13 @@
       await runRowAction(remedy.action, row, button);
       return;
     }
-    if (remedy.action === 'fixAuthentication') {
+    if (['fixAuthentication', 'fixAccess', 'fixCookies'].includes(remedy.action)) {
       openRetry(row.download, button);
       $('retry-cookie-source').focus();
+      return;
+    }
+    if (remedy.action === 'fixExtractor') {
+      showToolUpdates();
       return;
     }
     if (remedy.action === 'fixFolder') {
@@ -1150,7 +1234,7 @@
           (actionName === 'pause'
             ? ['pending', 'downloading'].includes(item.status)
             : actionName === 'resume'
-              ? item.status === 'paused'
+              ? item.status === 'paused' && !item.optionsNeedReview
               : actionName === 'move'
                 ? ['pending', 'paused'].includes(item.status)
                 : ['pending', 'paused', 'downloading'].includes(item.status)),
@@ -1230,6 +1314,7 @@
   }
   function openRetry(download, opener) {
     retryId = download.id;
+    retryDownload = download;
     retryOpener = opener;
     const options = download.options || {};
     $('retry-title').textContent = download.title || download.url;
@@ -1259,12 +1344,16 @@
       ? options.extraArgs.join(' ')
       : options.extraArgs || '';
     $('retry-error').hidden = true;
+    $('retry-guidance-status').textContent = '';
+    renderCookieHelp();
+    renderRetryGuidance();
     $('retry-dialog').showModal();
     $('retry-quality').focus();
   }
   function closeRetry() {
     $('retry-dialog').close();
     retryId = null;
+    retryDownload = null;
     if (retryOpener?.isConnected) retryOpener.focus();
     else $('video-urls').focus();
   }
@@ -1673,7 +1762,9 @@
   listen($('cookie-source'), 'change', () => {
     $('cookie-file-field').hidden = $('cookie-source').value !== 'file';
     void saveSettings({ cookieSource: $('cookie-source').value });
+    renderCookieHelp();
   });
+  listen($('download-cookie-source'), 'change', renderCookieHelp);
   for (const [id, key] of [
     ['js-runtime', 'jsRuntime'],
     ['user-agent', 'userAgent'],
@@ -1856,7 +1947,16 @@
   });
   listen($('retry-cookie-source'), 'change', () => {
     $('retry-cookie-field').hidden = $('retry-cookie-source').value !== 'file';
+    renderCookieHelp();
   });
+  listen($('retry-update-tools'), 'click', showToolUpdates);
+  listen($('retry-copy-source'), 'click', () =>
+    action($('retry-copy-source'), async () => {
+      if (!retryDownload) return;
+      await navigator.clipboard.writeText(retryDownload.url);
+      $('retry-guidance-status').textContent = t('sourceCopied');
+    }),
+  );
   listen($('retry-choose-cookie'), 'click', () =>
     action($('retry-choose-cookie'), async () => {
       const file = await request('chooseCookieFile');

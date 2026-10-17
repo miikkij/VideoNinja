@@ -217,12 +217,19 @@ function createHandlers(deps) {
       return deps.recheckTools();
     },
     toolAction: async (input) => {
-      record(input, ['action', 'tool']);
+      record(input, ['action', 'tool', 'channel']);
       if (
         !['check', 'install', 'update', 'diagnose'].includes(input.action) ||
         !['yt-dlp', 'ffmpeg', 'runtime'].includes(input.tool)
       )
         throw new UserError('Invalid tool action.');
+      if (
+        input.channel !== undefined &&
+        (input.tool !== 'yt-dlp' ||
+          !['install', 'update'].includes(input.action) ||
+          !['stable', 'nightly'].includes(input.channel))
+      )
+        throw new UserError('Invalid yt-dlp release channel.');
       if (!deps.toolManager)
         throw new UserError('Tool management is unavailable.', 'TOOLS_UNAVAILABLE');
       ready();
@@ -230,13 +237,13 @@ function createHandlers(deps) {
         return { tools: await deps.recheckTools(), setup: deps.toolManager.getSetupPlan() };
       const queueState = queue.getQueueState();
       if (
-        queueState.queue.length ||
+        queueState.queue.some((job) => job.status !== 'paused' || job.pausedBySchedule) ||
         queueState.isProcessing ||
         previewTasks.size ||
         (deps.hasToolCheck?.() ?? false)
       )
         throw new UserError(
-          'Finish or remove queued downloads and close previews before changing tools.',
+          'Pause queued downloads and close previews before changing tools. Wait for active processes to finish stopping.',
           'TOOLS_BUSY',
         );
       const controller = new AbortController();
@@ -245,7 +252,10 @@ function createHandlers(deps) {
         if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
         const result = await (input.action === 'diagnose'
           ? deps.toolManager.diagnose({ signal: controller.signal })
-          : deps.toolManager.install(input.tool, { signal: controller.signal }));
+          : deps.toolManager.install(input.tool, {
+              signal: controller.signal,
+              ...(input.channel ? { channel: input.channel } : {}),
+            }));
         if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
         const currentTools = await deps.recheckTools();
         return { result, tools: currentTools, setup: deps.toolManager.getSetupPlan() };

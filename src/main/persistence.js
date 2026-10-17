@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { normalizeOptions, validateUrl } = require('./downloadOptions');
+const { classifyDownloadError } = require('./downloadErrors');
 const { MAX_CONFIG_BYTES } = require('./storageLimits');
 
 const SCHEMA_VERSION = 1;
@@ -241,6 +242,39 @@ function timestamp(value, fallback = null) {
     : fallback;
 }
 
+/** Preserve usable records when a legacy execution option is no longer supported. */
+function restoreDownloadOptions(input) {
+  try {
+    return { options: normalizeOptions(input), needsReview: false };
+  } catch {
+    const options = { quality: 'best' };
+    try {
+      options.quality = normalizeOptions({ quality: input.quality, format: input.format }).quality;
+    } catch {
+      /* An obsolete format is reviewed before another download can start. */
+    }
+    // Authentication, network overrides and raw arguments are deliberately not
+    // carried into a repaired job. The user chooses them in Retry with options.
+    for (const key of [
+      'audioFormat',
+      'subtitles',
+      'subtitleAuto',
+      'subtitleLang',
+      'formatId',
+      'rateLimitKbps',
+    ]) {
+      if (input[key] === undefined) continue;
+      try {
+        const normalized = normalizeOptions({ [key]: input[key] });
+        if (normalized[key] !== undefined) options[key] = normalized[key];
+      } catch {
+        /* Recover other independent, valid media preferences. */
+      }
+    }
+    return { options, needsReview: true };
+  }
+}
+
 /** Migrate unversioned data and reject malformed entries before the queue can execute them. */
 function sanitizeQueueState(
   raw,
@@ -269,6 +303,7 @@ function sanitizeQueueState(
   const ids = new Set();
   let dropped = 0;
   let migratedIds = 0;
+  let reviewedOptions = 0;
   const restore = (entry, fromHistory) => {
     if (!isRecord(entry) || !isAbsoluteFilePath(entry.outputPath)) throw new Error('Invalid job.');
     if (entry.options !== undefined && !isRecord(entry.options))
@@ -289,11 +324,14 @@ function sanitizeQueueState(
       (fromHistory && !TERMINAL_STATES.has(status))
     )
       throw new Error('Invalid state.');
+    const recovered = restoreDownloadOptions(isRecord(entry.options) ? entry.options : {});
+    const optionsNeedReview = recovered.needsReview || entry.optionsNeedReview === true;
+    if (optionsNeedReview && !TERMINAL_STATES.has(status)) status = 'paused';
     const restored = {
       id,
       url: validateUrl(entry.url),
       outputPath: entry.outputPath,
-      options: normalizeOptions(isRecord(entry.options) ? entry.options : {}),
+      options: recovered.options,
       status,
       phase: status,
       progress:
@@ -312,10 +350,20 @@ function sanitizeQueueState(
       if (Number.isInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 100)
         restored[key] = entry[key];
     if (timestamp(entry.retryAt)) restored.retryAt = entry.retryAt;
-    for (const key of ['errorCode', 'errorAction'])
-      if (typeof entry[key] === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(entry[key]))
-        restored[key] = entry[key];
-    for (const key of ['errorRetryable', 'pausedBySchedule', 'private'])
+    // Old categories may have mistaken an extractor fallback warning for the
+    // final error. Reclassify the original diagnostic before redaction/truncation.
+    const classified =
+      typeof entry.error === 'string' && entry.error.trim()
+        ? classifyDownloadError(entry.error)
+        : ['stalled', 'disk-full', 'integrity'].includes(entry.errorCode)
+          ? classifyDownloadError({ downloadCode: entry.errorCode })
+          : null;
+    if (classified) {
+      restored.errorCode = classified.code;
+      restored.errorAction = classified.action;
+      restored.errorRetryable = classified.retryable;
+    }
+    for (const key of ['pausedBySchedule', 'private'])
       if (typeof entry[key] === 'boolean') restored[key] = entry[key];
     if (restored.private) throw new Error('Private jobs are not restored.');
     if (
@@ -325,6 +373,17 @@ function sanitizeQueueState(
       )
     )
       restored.phase = entry.phase;
+    if (optionsNeedReview) {
+      restored.optionsNeedReview = true;
+      restored.errorCode = 'options-review';
+      restored.errorAction = 'review-options';
+      restored.errorRetryable = false;
+      restored.retryAt = null;
+      restored.pausedBySchedule = false;
+      if (!['completed', 'skipped'].includes(status) && !restored.error)
+        restored.error =
+          'Saved download options are no longer supported. Review the options before retrying.';
+    }
     if (isRecord(entry.integrity) && ['verified', 'size-only'].includes(entry.integrity.status)) {
       restored.integrity = { status: entry.integrity.status };
       for (const key of ['size', 'duration'])
@@ -346,6 +405,7 @@ function sanitizeQueueState(
       throw new Error('Saved job limit reached.');
     ids.add(id);
     destination.push(restored);
+    if (recovered.needsReview) reviewedOptions++;
   };
   for (const [key, limit] of [
     ['queue', maxQueue + maxHistory],
@@ -368,6 +428,10 @@ function sanitizeQueueState(
   if (dropped)
     result.warnings.push(`${dropped} invalid, duplicate or excess saved jobs were ignored.`);
   if (migratedIds) result.warnings.push(`${migratedIds} legacy jobs received new IDs.`);
+  if (reviewedOptions)
+    result.warnings.push(
+      `${reviewedOptions} saved downloads had unsupported options. Their records were kept; review their options before downloading again.`,
+    );
   const archiveKeys = new Set();
   for (const entry of (Array.isArray(raw.archive) ? raw.archive : []).slice(0, 10000)) {
     if (

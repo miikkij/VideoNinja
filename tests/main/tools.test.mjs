@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import toolsModule from '../../src/main/tools.js';
 
 const { createToolService } = toolsModule;
-function serviceWith(files, platform = 'win32') {
+function serviceWith(files, platform = 'win32', overrides = {}) {
   const fs = {
     realpath: vi.fn(async (file) => {
       if (!files[file]) throw new Error('ENOENT');
@@ -21,11 +21,55 @@ function serviceWith(files, platform = 'win32') {
     fs,
     execFile,
     homeDir: '/home/test',
+    ...overrides,
   });
   return { service, execFile, fs };
 }
 
 describe('resolved executable discovery', () => {
+  it.each([
+    ['2026.07.19', '2026-10-17T23:59:59.999Z', false, 90, '2026-07-19'],
+    ['2026.07.18', '2026-10-17T00:00:00.000Z', true, 91, '2026-07-18'],
+    ['2026.07.18.232846', '2026-10-17T00:00:00.000Z', true, 91, '2026-07-18'],
+    ['2026.10.18', '2026-10-17T00:00:00.000Z', false, 0, '2026-10-18'],
+    ['2024.02.29', '2024-05-30T00:00:00.000Z', true, 91, '2024-02-29'],
+    ['2026.02.29', '2026-10-17T00:00:00.000Z', false, null, null],
+    ['2026.13.01', '2026-10-17T00:00:00.000Z', false, null, null],
+  ])(
+    'reports date-based freshness for %s at %s',
+    async (version, clock, stale, ageDays, releaseDate) => {
+      const { service } = serviceWith({ 'C:\\Tools\\yt-dlp.exe': version }, 'win32', {
+        now: () => Date.parse(clock),
+      });
+      expect(await service.checkYtDlpAvailability()).toMatchObject({
+        available: true,
+        version,
+        stale,
+        ageDays,
+        releaseDate,
+      });
+    },
+  );
+  it('does not invent a release date or stale warning for missing or unknown versions', async () => {
+    for (const files of [{}, { 'C:\\Tools\\yt-dlp.exe': 'custom-development' }]) {
+      const { service } = serviceWith(files);
+      expect(await service.checkYtDlpAvailability()).toMatchObject({
+        available: false,
+        stale: false,
+        ageDays: null,
+        releaseDate: null,
+      });
+    }
+  });
+  it('recomputes freshness when tools are checked again', async () => {
+    const now = vi
+      .fn()
+      .mockReturnValueOnce(Date.parse('2026-10-16'))
+      .mockReturnValueOnce(Date.parse('2026-10-17'));
+    const { service } = serviceWith({ 'C:\\Tools\\yt-dlp.exe': '2026.07.18' }, 'win32', { now });
+    expect((await service.checkYtDlpAvailability()).stale).toBe(false);
+    expect((await service.checkYtDlpAvailability()).stale).toBe(true);
+  });
   it('prefers isolated managed tools and their per-tool directories', () => {
     const service = createToolService({
       platform: 'win32',

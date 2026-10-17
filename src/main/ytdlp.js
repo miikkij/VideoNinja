@@ -46,18 +46,24 @@ function isWithin(root, filename) {
   );
 }
 
-function selectRuntime(options, toolInfo) {
+function selectRuntime(options, toolInfo, url) {
   const available = toolInfo.jsRuntimes || [];
   if (!options.jsRuntime || options.jsRuntime === 'auto') return available[0] || null;
   const selected = available.find((runtime) => runtime.name === options.jsRuntime);
-  if (!selected)
+  const hostname = new URL(url).hostname.toLowerCase().replace(/\.$/u, '');
+  const youtube = ['youtube.com', 'youtu.be', 'youtube-nocookie.com'].some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+  );
+  // The saved YouTube runtime preference must not block other extractors.
+  // Keep explicit diagnostics for YouTube and let yt-dlp diagnose embedded sources.
+  if (!selected && youtube)
     throw new Error(
       `The selected ${options.jsRuntime} JavaScript runtime is missing or unsupported.`,
     );
-  return selected;
+  return selected || null;
 }
 
-function buildCommonArgs(options, toolInfo, ffmpegInfo, { playlist = false } = {}) {
+function buildCommonArgs(options, toolInfo, ffmpegInfo, { url, playlist = false } = {}) {
   const args = [
     ...tools.SAFE_YTDLP_FLAGS,
     '--no-js-runtimes',
@@ -74,7 +80,7 @@ function buildCommonArgs(options, toolInfo, ffmpegInfo, { playlist = false } = {
   ];
   if (playlist) args.push('--yes-playlist');
   else args.push('--no-playlist', '--playlist-items', '1');
-  const runtime = selectRuntime(options, toolInfo);
+  const runtime = selectRuntime(options, toolInfo, url);
   if (runtime) args.push('--js-runtimes', `${runtime.name}:${runtime.path}`);
   if (ffmpegInfo?.available) args.push('--ffmpeg-location', ffmpegInfo.path);
   if (options.cookiesFromBrowser) args.push('--cookies-from-browser', options.cookiesFromBrowser);
@@ -92,7 +98,7 @@ function buildCommonArgs(options, toolInfo, ffmpegInfo, { playlist = false } = {
 function buildDownloadArgs(url, outputRoot, input, toolInfo, ffmpegInfo) {
   url = validateUrl(url);
   const options = normalizeOptions(input);
-  const args = buildCommonArgs(options, toolInfo, ffmpegInfo);
+  const args = buildCommonArgs(options, toolInfo, ffmpegInfo, { url });
   const sourceHash = createHash('sha256').update(url).digest('hex').slice(0, 16);
   const quality = options.formatId
     ? `fmt-${createHash('sha256')
@@ -511,7 +517,7 @@ function createDownloader(deps = {}) {
     try {
       const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
       const args = [
-        ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo),
+        ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo, { url }),
         '--skip-download',
         '--simulate',
         '--print',
@@ -572,7 +578,7 @@ function createDownloader(deps = {}) {
     try {
       const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
       const args = [
-        ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo, { playlist: true }),
+        ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo, { url, playlist: true }),
         '--flat-playlist',
         '--skip-download',
         '--simulate',

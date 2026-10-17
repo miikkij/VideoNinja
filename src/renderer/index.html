@@ -119,10 +119,22 @@
             Choose a folder and check the tools below to start your first download.
           </p>
           <div class="tool-grid">
-            <div class="tool-card">
+            <div class="tool-card" id="ytdlp-tools">
               <h3>yt-dlp</h3>
               <p id="ytdlp-status"></p>
               <p id="ytdlp-path" class="tool-path"></p>
+              <p id="ytdlp-age-warning" class="hint" hidden></p>
+              <div class="field">
+                <label for="ytdlp-channel" data-i18n="toolChannel">Release channel</label>
+                <select id="ytdlp-channel" aria-describedby="ytdlp-channel-hint">
+                  <option value="stable" data-i18n="toolStable">Stable</option>
+                  <option value="nightly" data-i18n="toolNightly">Nightly</option>
+                </select>
+                <p id="ytdlp-channel-hint" class="hint" data-i18n="toolChannelHint">
+                  Start with Stable. Nightly includes newer website fixes and may be less tested.
+                  Select a channel, then Install or Update. Switching back to Stable is supported.
+                </p>
+              </div>
               <div class="tool-buttons">
                 <button
                   type="button"
@@ -438,7 +450,7 @@
             <div class="settings-grid">
               <div class="field">
                 <label for="cookie-source" data-i18n="cookieSource">Cookie source</label
-                ><select id="cookie-source">
+                ><select id="cookie-source" aria-describedby="cookie-help">
                   <option value="" data-i18n="noCookies">No cookies</option>
                   <option value="file" data-i18n="cookieFile">Cookie file</option>
                   <option value="chrome">Chrome</option>
@@ -450,6 +462,7 @@
                   <option value="chromium">Chromium</option>
                   <option value="vivaldi">Vivaldi</option>
                 </select>
+                <p id="cookie-help" class="hint"></p>
               </div>
               <div class="field">
                 <label for="js-runtime" data-i18n="runtime">JavaScript runtime</label
@@ -637,7 +650,7 @@
                 >
                 <div class="field">
                   <label for="download-cookie-source" data-i18n="cookieSource">Cookie source</label
-                  ><select id="download-cookie-source">
+                  ><select id="download-cookie-source" aria-describedby="download-cookie-help">
                     <option value="default" data-i18n="useSettings">Use settings</option>
                     <option value="" data-i18n="noCookies">No cookies</option>
                     <option value="file" data-i18n="cookieFile">Cookie file</option>
@@ -650,6 +663,7 @@
                     <option value="chromium">Chromium</option>
                     <option value="vivaldi">Vivaldi</option>
                   </select>
+                  <p id="download-cookie-help" class="hint"></p>
                 </div>
               </div>
               <div class="field">
@@ -791,6 +805,25 @@
         <p id="retry-title" class="url-text"></p>
         <p id="retry-destination" class="hint"></p>
         <pre id="retry-original-error" class="error-detail"></pre>
+        <section
+          id="retry-guidance"
+          class="setup-guidance"
+          aria-labelledby="retry-guidance-heading"
+          hidden
+        >
+          <h3 id="retry-guidance-heading" data-i18n="retryGuidanceHeading">Before retrying</h3>
+          <p id="retry-guidance-message"></p>
+          <ol id="retry-guidance-steps"></ol>
+          <div class="tool-actions">
+            <button id="retry-copy-source" type="button" data-i18n="copySourceLink">
+              Copy source link
+            </button>
+            <button id="retry-update-tools" type="button" data-i18n="showToolUpdates">
+              Show yt-dlp updates
+            </button>
+          </div>
+          <p id="retry-guidance-status" class="hint" role="status"></p>
+        </section>
         <div class="field">
           <label for="retry-quality" data-i18n="quality">Quality</label
           ><select id="retry-quality">
@@ -838,7 +871,7 @@
         </div>
         <div class="field">
           <label for="retry-cookie-source" data-i18n="cookieSource">Cookie source</label
-          ><select id="retry-cookie-source">
+          ><select id="retry-cookie-source" aria-describedby="retry-cookie-help">
             <option value="" data-i18n="noCookies">No cookies</option>
             <option value="file" data-i18n="cookieFile">Cookie file</option>
             <option value="chrome">Chrome</option>
@@ -850,6 +883,7 @@
             <option value="chromium">Chromium</option>
             <option value="vivaldi">Vivaldi</option>
           </select>
+          <p id="retry-cookie-help" class="hint"></p>
         </div>
         <div class="field" id="retry-cookie-field" hidden>
           <label for="retry-cookie-file" data-i18n="cookieFile">Cookie file</label>

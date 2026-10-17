@@ -70,7 +70,7 @@ describe('saved state validation and migration', () => {
     expect(restored.warnings.join(' ')).toMatch(/legacy/);
   });
 
-  it('rejects corrupt data, unsafe options, duplicate IDs and unexpected versions', () => {
+  it('rejects corrupt data and duplicate IDs while retaining unsafe-option jobs for review', () => {
     const restored = sanitizeQueueState({
       schemaVersion: 1,
       queue: [
@@ -83,10 +83,149 @@ describe('saved state validation and migration', () => {
         job(undefined),
       ],
     });
-    expect(restored.queue.map((item) => item.id)).toEqual(['valid']);
-    expect(restored.warnings).toEqual(['6 invalid, duplicate or excess saved jobs were ignored.']);
+    expect(restored.queue.map((item) => item.id)).toEqual(['valid', 'options']);
+    expect(restored.queue[1]).toMatchObject({
+      status: 'paused',
+      options: { quality: 'best' },
+      optionsNeedReview: true,
+      errorCode: 'options-review',
+      errorRetryable: false,
+    });
+    expect(restored.warnings).toEqual([
+      '5 invalid, duplicate or excess saved jobs were ignored.',
+      '1 saved downloads had unsupported options. Their records were kept; review their options before downloading again.',
+    ]);
     expect(sanitizeQueueState({ schemaVersion: 99, queue: [job('future')] }).queue).toEqual([]);
     expect(sanitizeQueueState({ queue: 'bad', history: {} }).warnings).toHaveLength(2);
+  });
+
+  it.each([
+    { extraArgs: '--write-thumbnail' },
+    { jsRuntime: 'bun' },
+    { extractorArgs: 'youtube:player_client=web;skip=dash' },
+    { format: 'unrecognized-legacy-format' },
+  ])(
+    'preserves completed history and its file link when legacy options need review: %o',
+    (legacy) => {
+      const original = {
+        history: [
+          job('legacy', {
+            status: 'completed',
+            filepath: '/tmp/Existing title.mp4',
+            options: {
+              quality: '720',
+              subtitles: true,
+              subtitleLang: 'fi,en',
+              cookieFile: '/tmp/private.cookies',
+              userAgent: 'Private Agent',
+              ...legacy,
+            },
+          }),
+        ],
+      };
+      // Let an unsupported legacy format be the only quality selector.
+      if (legacy.format) delete original.history[0].options.quality;
+      const before = structuredClone(original);
+      const restored = sanitizeQueueState(original);
+      expect(original).toEqual(before);
+      expect(restored.history).toHaveLength(1);
+      expect(restored.queue).toEqual([]);
+      expect(restored.history[0]).toMatchObject({
+        id: 'legacy',
+        status: 'completed',
+        filepath: '/tmp/Existing title.mp4',
+        optionsNeedReview: true,
+        errorCode: 'options-review',
+        error: null,
+        options: {
+          quality: legacy.format ? 'best' : '720',
+          subtitles: true,
+          subtitleLang: 'fi,en',
+        },
+      });
+      const serialized = JSON.stringify(restored);
+      expect(serialized).not.toContain('private.cookies');
+      expect(serialized).not.toContain('Private Agent');
+      expect(serialized).not.toContain('--write-thumbnail');
+      expect(restored.warnings.join(' ')).toMatch(/records were kept/);
+      const restarted = sanitizeQueueState(restored);
+      expect(restarted.history[0]).toEqual(restored.history[0]);
+    },
+  );
+
+  it('keeps a full queue awaiting options review without evicting existing history', () => {
+    const original = {
+      queue: Array.from({ length: 500 }, (_, index) =>
+        job('q' + index, {
+          status: index % 2 ? 'downloading' : 'pending',
+          pausedBySchedule: true,
+          retryAt: '2026-10-17T00:00:00Z',
+          options: { quality: '1080', extraArgs: '--exec unwanted' },
+        }),
+      ),
+      history: Array.from({ length: 100 }, (_, index) => job('h' + index, { status: 'completed' })),
+    };
+    const restored = sanitizeQueueState(original);
+    expect(restored.queue).toHaveLength(500);
+    expect(restored.history).toHaveLength(100);
+    for (const saved of restored.queue) {
+      expect(saved).toMatchObject({
+        status: 'paused',
+        phase: 'paused',
+        optionsNeedReview: true,
+        options: { quality: '1080' },
+        errorCode: 'options-review',
+        errorAction: 'review-options',
+        errorRetryable: false,
+        pausedBySchedule: false,
+        retryAt: null,
+      });
+      expect(saved.error).toMatch(/Review the options/);
+    }
+    const restarted = sanitizeQueueState(restored);
+    expect(
+      restarted.queue.map((saved) => [saved.id, saved.status, saved.optionsNeedReview]),
+    ).toEqual(restored.queue.map((saved) => [saved.id, saved.status, saved.optionsNeedReview]));
+    expect(restarted.history).toHaveLength(100);
+  });
+
+  it('reclassifies saved diagnostics instead of trusting obsolete error codes', () => {
+    const restored = sanitizeQueueState({
+      history: [
+        job('ambiguous', {
+          status: 'failed',
+          errorCode: 'rate-limit',
+          errorAction: 'wait-and-retry',
+          errorRetryable: true,
+          error:
+            'WARNING: HTTP Error 429\nERROR: [Instagram] Rate-limit reached or login required.',
+        }),
+        job('network', {
+          status: 'failed',
+          errorCode: 'auth',
+          errorAction: 'update-cookies',
+          errorRetryable: false,
+          error: 'ERROR: Connection reset by peer',
+        }),
+        job('watchdog', { status: 'failed', errorCode: 'stalled' }),
+        job('disk', { status: 'failed', errorCode: 'disk-full' }),
+      ],
+    });
+    expect(restored.history[0]).toMatchObject({
+      errorCode: 'access',
+      errorAction: 'check-access',
+      errorRetryable: false,
+    });
+    expect(restored.history[1]).toMatchObject({
+      errorCode: 'network',
+      errorAction: 'check-network',
+      errorRetryable: true,
+    });
+    expect(restored.history[2]).toMatchObject({ errorCode: 'stalled', errorAction: 'retry' });
+    expect(restored.history[3]).toMatchObject({
+      errorCode: 'disk-full',
+      errorAction: 'free-space',
+    });
   });
 
   it('bounds pending/history counts, error output, title and numeric progress', () => {

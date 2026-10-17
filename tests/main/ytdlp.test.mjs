@@ -113,10 +113,41 @@ describe('production argument builder', () => {
       ),
     ).toThrow(/ffmpeg/u);
   });
-  it('rejects a missing explicitly selected runtime', () => {
-    expect(() =>
-      buildDownloadArgs('https://example.com/', root, { jsRuntime: 'node' }, yt, ffmpeg),
-    ).toThrow(/missing or unsupported/u);
+  it.each([
+    'https://youtube.com/watch?v=example',
+    'https://music.youtube.com/watch?v=example',
+    'https://www.youtube.com./watch?v=example',
+    'https://youtu.be/example',
+    'https://www.youtube-nocookie.com/embed/example',
+  ])('keeps the missing explicit runtime diagnosis for YouTube: %s', (url) => {
+    expect(() => buildDownloadArgs(url, root, { jsRuntime: 'node' }, yt, ffmpeg)).toThrow(
+      /missing or unsupported/u,
+    );
+  });
+  it.each([
+    'https://example.com/direct.mp4',
+    'https://www.instagram.com/p/example/',
+    'https://youtube.com.example.org/watch?v=example',
+    'https://example.org/video?source=youtube.com',
+  ])('does not require a missing YouTube runtime for another source: %s', (url) => {
+    const args = buildDownloadArgs(url, root, { jsRuntime: 'node' }, yt, ffmpeg);
+    expect(args).not.toContain('--js-runtimes');
+    expect(args).toContain('--no-js-runtimes');
+    expect(args.slice(-2)).toEqual(['--', url]);
+  });
+  it('preserves an available explicit runtime and automatic runtime selection', () => {
+    const both = {
+      ...yt,
+      jsRuntimes: [...yt.jsRuntimes, { name: 'node', path: path.resolve('tools/node') }],
+    };
+    for (const url of ['https://example.com/direct.mp4', 'https://youtu.be/example']) {
+      const selected = buildDownloadArgs(url, root, { jsRuntime: 'node' }, both, ffmpeg);
+      expect(selected[selected.indexOf('--js-runtimes') + 1]).toBe(
+        `node:${both.jsRuntimes[1].path}`,
+      );
+      const auto = buildDownloadArgs(url, root, { jsRuntime: 'auto' }, both, ffmpeg);
+      expect(auto[auto.indexOf('--js-runtimes') + 1]).toBe(`deno:${yt.jsRuntimes[0].path}`);
+    }
   });
   it('isolates aliases and requested formats while keeping same-input filenames stable', () => {
     const template = (url, options = {}) => {
@@ -143,6 +174,46 @@ describe('production argument builder', () => {
       .replace('%(ext)s', 'webm');
     expect(Buffer.byteLength(expanded)).toBeLessThanOrEqual(255);
   });
+});
+
+describe('source-specific runtime requirements', () => {
+  it.each(['download', 'metadata', 'playlist'])(
+    'allows non-YouTube %s but keeps explicit YouTube failures before process launch',
+    async (operation) => {
+      const { service, runProcess } = setup(async (_file, _args, handlers) => {
+        if (operation === 'download')
+          handlers.onStdoutLine(`${PROTOCOL.file}${JSON.stringify(finalFile)}`);
+        else if (operation === 'metadata')
+          handlers.onStdoutLine(
+            `${PROTOCOL.metadata}${JSON.stringify({ title: 'Owned fixture' })}`,
+          );
+        else
+          handlers.onStdoutLine(
+            `${PROTOCOL.playlist}${JSON.stringify({ type: 'playlist', entries: [] })}`,
+          );
+        return { code: 0 };
+      });
+      const invoke = (url) =>
+        operation === 'download'
+          ? service.downloadVideo(url, root, { jsRuntime: 'node' })
+          : operation === 'metadata'
+            ? service.fetchMetadata(url, { jsRuntime: 'node' })
+            : service.fetchPlaylist(url, { jsRuntime: 'node' });
+      await invoke('https://example.com/owned-media');
+      expect(runProcess).toHaveBeenCalledOnce();
+      expect(runProcess.mock.calls[0][1]).not.toContain('--js-runtimes');
+      if (operation === 'download')
+        expect(await invoke('https://www.youtube.com/watch?v=example')).toMatchObject({
+          success: false,
+          error: expect.stringMatching(/missing or unsupported/u),
+        });
+      else
+        await expect(invoke('https://www.youtube.com/watch?v=example')).rejects.toThrow(
+          /missing or unsupported/u,
+        );
+      expect(runProcess).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe('download result protocol', () => {

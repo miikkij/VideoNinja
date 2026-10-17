@@ -1234,6 +1234,28 @@ describe('DownloadQueue lifecycle', () => {
     expect(() => queue.loadState({})).toThrow(/running/);
   });
 
+  it('requires explicit option review for restored jobs without losing their queue slot', () => {
+    const { queue } = controlledQueue();
+    queue.loadState(
+      {
+        queue: [job('review', 'paused', { optionsNeedReview: true, options: { quality: '720' } })],
+        history: [job('old-failure', 'failed', { optionsNeedReview: true })],
+      },
+      { start: false },
+    );
+    expect(queue.resumeDownload('review')).toBe(false);
+    expect(queue.retryDownload('old-failure')).toBeNull();
+    expect(queue.bulkAction('resume', ['review'])).toEqual([]);
+    expect(queue.bulkAction('retry', ['old-failure'])).toEqual([]);
+    expect(() => queue.retryWithOptions('review', { quality: 'invalid' })).toThrow();
+    expect(queue.getDownload('review').optionsNeedReview).toBe(true);
+    expect(queue.retryWithOptions('review', { quality: '1080' })).toBe('review');
+    expect(queue.queue).toHaveLength(1);
+    expect(queue.getDownload('review').optionsNeedReview).toBeUndefined();
+    expect(queue.getDownload('review').options.quality).toBe('1080');
+    expect(queue.history).toHaveLength(1);
+  });
+
   it('allows deferred restore and applies queue capacity', () => {
     const { queue, downloadVideo } = controlledQueue({ maxQueue: 2 });
     queue.loadState({ queue: [job('a'), job('b')] }, { start: false });

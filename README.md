@@ -90,6 +90,7 @@ set the maximum number of simultaneous downloads.
 
 - [Quick start](QUICK_START.md) / [Pikaohje suomeksi](QUICK_START.fi.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Service requirements and download recovery](docs/USER_GUIDE.md)
 - [Development and packaging](CONTRIBUTING.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Analysis, implementation and verification](docs/DEVELOPMENT_PLAN.md), in Finnish
@@ -148,6 +149,14 @@ macOS uses guided Homebrew installation. Downloads use official upstream release
 sources and their SHA-256 manifests, then stage and verify executables before
 replacing the previous managed version. Tools installed by another method remain
 under that method's control.
+
+Choose **Stable** or **Nightly** in the yt-dlp card before updating. Upstream
+recommends Nightly for current site fixes. VideoNinja warns when the detected
+yt-dlp build is more than 90 days old. Updating the app itself does not update
+an old globally installed yt-dlp: install/update the managed engine in Settings.
+Manually paused jobs can stay in the queue during a tool update; wait until their
+download processes have stopped. See the [service guide](docs/USER_GUIDE.md) for
+Instagram access errors, browser cookies and YouTube requirements.
 
 Managed tools under the app's user-data folder take discovery priority, followed
 by executable/PATH and common installation locations. Settings shows detected

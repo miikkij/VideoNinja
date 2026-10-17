@@ -725,7 +725,7 @@ class DownloadQueue extends EventEmitter {
 
   resumeDownload(id) {
     const download = this.queue.find((item) => item.id === id && item.status === 'paused');
-    if (!download || this._shuttingDown) return false;
+    if (!download || download.optionsNeedReview || this._shuttingDown) return false;
     download.status = 'pending';
     download.phase = 'pending';
     download.pausedBySchedule = false;
@@ -758,14 +758,19 @@ class DownloadQueue extends EventEmitter {
     const download = this.history.find(
       (item) => item.id === id && ['failed', 'cancelled'].includes(item.status),
     );
-    return download ? this.addDownload(download.url, download.outputPath, download.options) : null;
+    return download && !download.optionsNeedReview
+      ? this.addDownload(download.url, download.outputPath, download.options)
+      : null;
   }
 
   retryWithOptions(id, overrideOptions = {}, outputPath) {
-    const download = this.history.find(
-      (item) => item.id === id && ['failed', 'cancelled'].includes(item.status),
+    const reviewJob = this.queue.find(
+      (item) => item.id === id && item.status === 'paused' && item.optionsNeedReview,
     );
-    if (!download) return null;
+    const download =
+      reviewJob ||
+      this.history.find((item) => item.id === id && ['failed', 'cancelled'].includes(item.status));
+    if (!download || this._shuttingDown) return null;
     const original = download.options;
     const safeOriginal = {};
     for (const key of [
@@ -781,10 +786,34 @@ class DownloadQueue extends EventEmitter {
     }
     if (overrideOptions.quality !== undefined && overrideOptions.formatId === undefined)
       delete safeOriginal.formatId;
-    return this.addDownload(download.url, outputPath || download.outputPath, {
+    const options = normalizeOptions({
       ...safeOriginal,
       ...overrideOptions,
     });
+    const folder = outputPath || download.outputPath;
+    if (reviewJob) {
+      if (!isAbsoluteFilePath(folder)) throw new Error('Choose a valid download folder.');
+      // Review jobs retain their slot and ID, including a completely full queue.
+      // Only this explicit options submission can make them runnable again.
+      Object.assign(reviewJob, {
+        options,
+        outputPath: folder,
+        status: 'pending',
+        phase: 'pending',
+        error: null,
+        errorCode: null,
+        errorAction: null,
+        errorRetryable: false,
+        retryCount: 0,
+        retryAt: null,
+        pausedBySchedule: false,
+      });
+      delete reviewJob.optionsNeedReview;
+      this._notify();
+      this.processNext();
+      return reviewJob.id;
+    }
+    return this.addDownload(download.url, folder, options);
   }
 
   /** Validate the complete selection before changing any jobs. Ineligible states are skipped. */
@@ -805,7 +834,9 @@ class DownloadQueue extends EventEmitter {
       throw new Error('A selected job is no longer available.');
     const downloads = source.filter((job) => selected.has(job.id));
     if (action === 'retry') {
-      const eligible = downloads.filter((job) => ['failed', 'cancelled'].includes(job.status));
+      const eligible = downloads.filter(
+        (job) => ['failed', 'cancelled'].includes(job.status) && !job.optionsNeedReview,
+      );
       if (this.queue.length + eligible.length > this._maxQueue)
         throw new Error('The download queue is full.');
       for (const job of eligible) normalizeOptions(job.options);

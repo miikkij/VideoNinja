@@ -165,6 +165,22 @@ describe('feature IPC validation', () => {
     release({ status: 'installed' });
     await installing;
   });
+
+  it('passes only supported yt-dlp update channels to the managed installer', async () => {
+    const { handlers, toolManager } = fixture();
+    await handlers.toolAction({ action: 'update', tool: 'yt-dlp', channel: 'nightly' });
+    expect(toolManager.install).toHaveBeenCalledWith('yt-dlp', {
+      signal: expect.any(AbortSignal),
+      channel: 'nightly',
+    });
+    for (const input of [
+      { action: 'update', tool: 'yt-dlp', channel: 'arbitrary/repo' },
+      { action: 'update', tool: 'runtime', channel: 'nightly' },
+      { action: 'check', tool: 'yt-dlp', channel: 'nightly' },
+    ])
+      await expect(handlers.toolAction(input)).rejects.toThrow(/release channel/);
+    expect(toolManager.install).toHaveBeenCalledOnce();
+  });
   it('retries changed options in the currently selected folder', async () => {
     const { handlers, queue } = fixture();
     await handlers.retryDownload({ id: 'job', options: { quality: '1080' } });
@@ -189,6 +205,28 @@ describe('feature IPC validation', () => {
     queue.getQueueState = () => ({ queue: [], isProcessing: true, activeIds: ['exiting'] });
     await expect(handlers.toolAction({ action: 'install', tool: 'yt-dlp' })).rejects.toThrow(
       /queued downloads/,
+    );
+    expect(toolManager.install).not.toHaveBeenCalled();
+  });
+
+  it('updates tools without discarding manually paused downloads', async () => {
+    const { handlers, queue, toolManager } = fixture();
+    const jobs = [{ id: 'kept', status: 'paused', pausedBySchedule: false }];
+    queue.getQueueState = () => ({ queue: jobs, isProcessing: false });
+    await handlers.toolAction({ action: 'update', tool: 'yt-dlp', channel: 'nightly' });
+    expect(toolManager.install).toHaveBeenCalledOnce();
+    expect(jobs).toEqual([{ id: 'kept', status: 'paused', pausedBySchedule: false }]);
+  });
+
+  it.each([
+    { status: 'pending' },
+    { status: 'paused', pausedBySchedule: true },
+    { status: 'downloading' },
+  ])('does not replace tools while a job may start automatically: %s', async (job) => {
+    const { handlers, queue, toolManager } = fixture();
+    queue.getQueueState = () => ({ queue: [job], isProcessing: false });
+    await expect(handlers.toolAction({ action: 'update', tool: 'yt-dlp' })).rejects.toThrow(
+      /Pause queued/,
     );
     expect(toolManager.install).not.toHaveBeenCalled();
   });

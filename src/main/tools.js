@@ -12,6 +12,21 @@ const SAFE_YTDLP_FLAGS = Object.freeze([
   '--no-remote-components',
 ]);
 
+function versionFreshness(version, now) {
+  const unknown = { stale: false, ageDays: null, releaseDate: null };
+  const match = /^(\d{4})\.(\d{2})\.(\d{2})(?:$|[.\w-])/u.exec(version || '');
+  if (!match || !Number.isFinite(Number(now))) return unknown;
+  const [, year, month, day] = match;
+  const releaseDate = `${year}-${month}-${day}`;
+  const released = Date.parse(`${releaseDate}T00:00:00.000Z`);
+  if (!Number.isFinite(released) || new Date(released).toISOString().slice(0, 10) !== releaseDate)
+    return unknown;
+  // Compare UTC calendar days: a date-only release is not stale partway through day 90.
+  const dayMs = 24 * 60 * 60 * 1000;
+  const ageDays = Math.max(0, Math.floor(Number(now) / dayMs) - Math.floor(released / dayMs));
+  return { stale: ageDays > 90, ageDays, releaseDate };
+}
+
 async function settleProbes(probes) {
   const results = await Promise.allSettled(probes);
   const failure = results.find((result) => result.status === 'rejected');
@@ -27,6 +42,7 @@ function createToolService(deps = {}) {
   const execute = deps.execFile || execFileAsync;
   const run = deps.runProcess || runProcess;
   const execPath = deps.execPath || process.execPath;
+  const now = deps.now || Date.now;
 
   function candidates(name) {
     const pathValue = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
@@ -189,6 +205,7 @@ function createToolService(deps = {}) {
     ]);
     return {
       ...tool,
+      ...versionFreshness(tool.version, now()),
       jsRuntimes: runtimeChecks.filter((runtime) => runtime.available),
       runtimeChecks,
       ejs: 'not-checked',
