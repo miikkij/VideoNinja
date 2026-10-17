@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "releases": [
+    {
+      "version": "1.2.1",
+      "date": "2026-10-18",
+      "notes": {
+        "en": [
+          "The installed version is visible in the header and window title, and matches the installer version.",
+          "Each installed update shows these notes once until you acknowledge them. Open What's new to read them again."
+        ],
+        "fi": [
+          "Asennetun version numero näkyy otsikossa ja ikkunan nimessä, ja se vastaa asennuspaketin versiota.",
+          "Asennetun päivityksen muutosilmoitus näkyy, kunnes kuittaat sen. Voit lukea sen uudelleen Mitä uutta -painikkeesta."
+        ]
+      }
+    },
+    {
+      "version": "1.2.0",
+      "date": "2026-10-17",
+      "notes": {
+        "en": [
+          "Automatic browser-challenge recovery, expiring site preferences and separate site cooldowns.",
+          "Optional daily maintenance for managed download tools with a remembered Stable or Nightly channel.",
+          "Clearer download recovery actions and restored ninja sayings and camera effects."
+        ],
+        "fi": [
+          "Automaattinen selainhaasteen korjausyritys, vanhenevat sivustoasetukset ja sivustokohtaiset odotusajat.",
+          "Valinnainen päivittäinen lataustyökalujen huolto ja muistettava Stable- tai Nightly-kanava.",
+          "Selkeämmät latausvirheiden toimintaohjeet sekä palautetut ninjahuudot ja kameratehosteet."
+        ]
+      }
+    }
+  ]
+}

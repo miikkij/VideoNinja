@@ -380,7 +380,7 @@
     updateTool: 'Update',
     diagnoseTools: 'Check YouTube readiness',
     checkUpdatesStartup: 'Check for updates when VideoNinja starts',
-    releaseNotes: "What's new",
+    releaseNotes: 'Update release notes',
     copySourceLink: 'Copy source link',
     sourceCopied: 'Source link copied. Open it in your browser to check access.',
     toolInstalled: '{tool} {version} installed.',
@@ -573,7 +573,7 @@
     updateTool: 'Päivitä',
     diagnoseTools: 'Tarkista YouTube-valmius',
     checkUpdatesStartup: 'Tarkista päivitykset VideoNinjan käynnistyessä',
-    releaseNotes: 'Mitä uutta',
+    releaseNotes: 'Päivityksen julkaisutiedot',
     copySourceLink: 'Kopioi lähdelinkki',
     sourceCopied: 'Lähdelinkki kopioitu. Avaa se selaimessa käyttöoikeuden tarkistamiseksi.',
     toolInstalled: '{tool} {version} asennettu.',
@@ -982,6 +982,25 @@
     compatibilityNotChecked: 'Avaa tämä osio tai päivitä muistettujen sivustojen määrä.',
     compatibilityCount: 'Muistettuja sivustoja: {count}',
     compatibilityCleared: 'Muistettu sivustoyhteensopivuus tyhjennettiin.',
+  });
+  Object.assign(messages.en, {
+    installedWhatsNew: "What's new",
+    installedVersion: 'VideoNinja v{version}',
+    previousVersion: 'Previous version: {version}',
+    installedNotes: "What's new in this version",
+    installedNotesEmpty: 'No local release notes are included for this version.',
+    acknowledgeRelease: 'Got it',
+    releaseAcknowledgementFailed: 'Could not save your acknowledgment. Select Got it to try again.',
+  });
+  Object.assign(messages.fi, {
+    installedWhatsNew: 'Mitä uutta',
+    installedVersion: 'VideoNinja v{version}',
+    previousVersion: 'Edellinen versio: {version}',
+    installedNotes: 'Tämän version muutokset',
+    installedNotesEmpty: 'Tälle versiolle ei ole mukana paikallista muutosluetteloa.',
+    acknowledgeRelease: 'Kuittaan',
+    releaseAcknowledgementFailed:
+      'Kuittausta ei voitu tallentaa. Yritä uudelleen valitsemalla Kuittaan.',
   });
   let language = 'en';
   function t(key, values = {}) {

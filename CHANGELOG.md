@@ -2,12 +2,29 @@
 
 All notable changes to VideoNinja are recorded here.
 
-## [Unreleased] - 1.2.0 development
-
 Public download links still point to 1.1.0. No 1.2 release or signed binaries have
 been published.
 
+## [1.2.1] - 2026-10-18 (development build)
+
 ### Added
+
+- One canonical application version for the visible header, native window title
+  and installer metadata. Each delivered application update advances the version.
+- Bundled English/Finnish What's new notes, shown for a newly installed version
+  until acknowledged and always available to reopen from the header.
+- A persisted per-version acknowledgement. A missing legacy version marker is
+  treated as unknown; development launches do not overwrite installed-version state.
+- `pnpm version:next patch|minor|major|x.y.z`, guarded by matching bilingual notes
+  and release validation. The command does not commit, tag or publish a release.
+
+## [1.2.0] - 2026-10-17 (development builds)
+
+### Added
+
+- One browser-compatibility retry for recognized challenges, expiring per-site
+  preferences and per-site rate-limit cooldowns.
+- Opt-in daily managed-tool maintenance with a remembered Stable/Nightly channel.
 
 - Explicit managed yt-dlp/Deno installation and updates; managed Windows/Linux
   ffmpeg/ffprobe and guided macOS ffmpeg setup, with upstream checksum verification,

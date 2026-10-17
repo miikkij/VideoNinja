@@ -38,6 +38,10 @@ describe('release verifier', () => {
       repository: { url: 'https://github.com/miikkij/VideoNinja.git' },
       build: { productName: 'VideoNinja' },
     });
+    json(path.join(fixture, 'src', 'shared', 'releaseNotes.json'), {
+      schemaVersion: 1,
+      releases: [{ version, date: '2026-10-18', notes: { en: ['A fix.'], fi: ['Korjaus.'] } }],
+    });
   });
 
   afterEach(() => {
@@ -109,6 +113,10 @@ describe('release verifier', () => {
     const filename = path.join(fixture, 'scripts', 'verify-release.mjs');
     fs.mkdirSync(path.dirname(filename), { recursive: true });
     fs.copyFileSync(source, filename);
+    fs.copyFileSync(
+      path.join(path.dirname(source), 'release-notes.mjs'),
+      path.join(path.dirname(filename), 'release-notes.mjs'),
+    );
     let entry = filename;
     if (throughDirectoryLink) {
       const link = path.join(fixture, 'linked-scripts');
@@ -152,6 +160,28 @@ describe('release verifier', () => {
     await expect(
       check({ env: { GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: 'v1.2.4' } }),
     ).rejects.toThrow(`Release tag must be v${version}`);
+  });
+
+  it('rejects missing or mismatched notes before dependency installation or artifact checks', async () => {
+    const filename = path.join(fixture, 'src', 'shared', 'releaseNotes.json');
+    const notes = JSON.parse(fs.readFileSync(filename, 'utf8'));
+    notes.releases[0].version = '1.2.4';
+    json(filename, notes);
+    await expect(check({ artifacts: false })).rejects.toThrow('Latest release notes');
+    await expect(check()).rejects.toThrow('Latest release notes');
+    const cli = runVersion();
+    expect(cli.status).toBe(1);
+    expect(cli.stderr).toContain('Latest release notes');
+    fs.unlinkSync(filename);
+    await expect(check({ artifacts: false })).rejects.toThrow('ENOENT');
+  });
+
+  it('rejects notes missing their Finnish translation', async () => {
+    json(path.join(fixture, 'src', 'shared', 'releaseNotes.json'), {
+      schemaVersion: 1,
+      releases: [{ version, date: '2026-10-18', notes: { en: ['A fix.'] } }],
+    });
+    await expect(check({ artifacts: false })).rejects.toThrow('fi notes');
   });
 
   it.each(['win32', 'darwin', 'linux'])(

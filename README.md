@@ -8,7 +8,7 @@ Choose a folder, paste video links and follow the queue in English or Finnish.
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) handles downloads; your settings and history
 stay on your computer.
 
-**The source tree is the unreleased 1.2.0 development version.** The downloads below
+**The source tree is the unreleased 1.2.1 development version.** The downloads below
 are the published 1.1.0 release. The feature descriptions and guides describe
 1.2 development; its new controls are not present in the 1.1 installers.
 
@@ -99,6 +99,8 @@ set the maximum number of simultaneous downloads.
 ## Features
 
 - English/Finnish interface, keyboard controls and light, dark or system theme.
+- A visible installed version and bilingual What's new notes for each delivered
+  update, with a persistent acknowledgement and a header button to reopen them.
 - Ninja wisdom, a camera flash and playful download messages, with all 210 original
   English quotes and matching Finnish translations.
 - Up to 100 links per ordinary batch, 500 queued jobs and 1–5 concurrent downloads.

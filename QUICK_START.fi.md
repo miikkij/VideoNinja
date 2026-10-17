@@ -2,7 +2,7 @@
 
 [English](QUICK_START.md) · [Vianetsintä](docs/TROUBLESHOOTING.md)
 
-Ohje kuvaa **1.2.0-kehitysversiota**, joka käynnistetään
+Ohje kuvaa **1.2-kehitysversioita**, jotka käynnistetään
 [lähdekoodista](README.md#run-from-source). Julkiset
 [1.1.0:n latauspaketit](README.md#download-videoninja-110) ovat edelleen Windows
 x64:lle, macOS Apple Siliconille ja Linux x64:lle. Paketit ovat

@@ -49,6 +49,24 @@ function fixture(overrides = {}) {
   return { ...result, queue, dialog, toolManager, appUpdater, tools, settings: () => settings };
 }
 describe('feature IPC validation', () => {
+  it('acknowledges only the current application version without a download admission lock', () => {
+    const appRelease = {
+      getState: () => ({ version: '1.2.1' }),
+      acknowledge: vi.fn(() => ({ acknowledged: true })),
+    };
+    const { handlers, queue } = fixture({ appRelease, isInstallingUpdate: () => true });
+    queue.getQueueState = () => ({ queue: [{ status: 'downloading' }], isProcessing: true });
+    expect(handlers.acknowledgeAppRelease({ version: '1.2.1' })).toEqual({ acknowledged: true });
+    for (const value of [{ version: '1.2.0' }, { version: '1.2.1', extra: true }, {}, null])
+      expect(() => handlers.acknowledgeAppRelease(value)).toThrow();
+    expect(appRelease.acknowledge).toHaveBeenCalledOnce();
+    appRelease.acknowledge.mockImplementation(() => {
+      throw new Error('private disk path');
+    });
+    expect(() => handlers.acknowledgeAppRelease({ version: '1.2.1' })).toThrow(
+      'The update acknowledgement could not be saved. Try again.',
+    );
+  });
   it('blocks queue mutations during native installation and admits them after failure recovery', async () => {
     let installing = true;
     const { handlers, queue } = fixture({ isInstallingUpdate: () => installing });

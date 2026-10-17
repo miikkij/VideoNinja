@@ -18,6 +18,7 @@ describe('private profile store', () => {
     const raw = {
       store: {
         settings: { language: 'fi' },
+        releaseState: { version: '1.2.1', previousVersion: '1.2.0', acknowledged: false },
         queueState: { queue: [{ url: 'https://private.example/secret' }] },
         siteCompatibility: [
           {
@@ -38,10 +39,21 @@ describe('private profile store', () => {
     const restored = privacy.createPrivateStore(raw, vault());
     expect(restored.get('queueState').queue[0].url).toContain('private.example');
     expect(restored.get('siteCompatibility')[0].origin).toBe('https://remembered.example');
+    restored.set('releaseState', {
+      version: '1.2.1',
+      previousVersion: '1.2.0',
+      acknowledged: true,
+    });
+    expect(privacy.createPrivateStore(raw, vault()).get('releaseState').acknowledged).toBe(true);
     restored.set('settings', { encryptedStorage: false });
     expect(raw.store.protectedState).toBeUndefined();
     expect(raw.store.queueState.queue).toHaveLength(1);
     expect(raw.store.siteCompatibility[0].origin).toBe('https://remembered.example');
+    expect(raw.store.releaseState).toEqual({
+      version: '1.2.1',
+      previousVersion: '1.2.0',
+      acknowledged: true,
+    });
   });
   it('rejects Linux plaintext fallback and preserves the original document', () => {
     const raw = { store: { settings: { language: 'en' } } };

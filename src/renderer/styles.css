@@ -460,6 +460,27 @@ details > p {
   border-color: var(--error-line);
   background: var(--error-bg);
 }
+.installed-release {
+  border-color: var(--accent);
+}
+.installed-release .section-heading {
+  margin-bottom: 0.4rem;
+}
+.installed-release details {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+}
+#installed-notes-list {
+  padding-inline-start: 1.5rem;
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+#installed-notes-list li + li {
+  margin-top: 0.4rem;
+}
+#installed-release-error {
+  margin-top: 0.6rem;
+}
 .field-error {
   color: var(--danger);
   font-size: 0.9rem;

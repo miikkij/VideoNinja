@@ -2,7 +2,7 @@
 
 ## Versiot ja rajaus
 
-Lähdekoodin versio on **1.2.0, kehitysversio**. Julkinen
+Lähdekoodin versio on **1.2.1, kehitysversio**. Julkinen
 [1.1.0-julkaisu](https://github.com/miikkij/VideoNinja/releases/tag/v1.1.0) säilyy
 latauslinkkien kohteena. Tässä työssä ei julkaista uutta versiota. Julkaistut
 Windows x64-, macOS ARM64- ja Linux x64 -paketit ovat allekirjoittamattomia;

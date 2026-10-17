@@ -1,6 +1,6 @@
 # Architecture
 
-This describes **1.2.0 development**, not the published 1.1.0 packages. See the
+This describes the **1.2 development series**, not the published 1.1.0 packages. See the
 [implementation record](DEVELOPMENT_PLAN.md) for verification and release boundaries.
 
 ## Runtime boundaries
@@ -41,6 +41,7 @@ and new windows are denied. Untrusted titles/errors enter the DOM as text.
 | `src/main/processRunner.js`                    | Bounded UTF-8 output, process-tree cancellation and shell-free execution.                                   |
 | `src/main/ytdlp.js`                            | Arguments, projected metadata, paging, final-path/integrity checks and disk measurement.                    |
 | `src/main/appUpdater.js`, `notifications.js`   | Explicit application updates and opt-in grouped notifications.                                              |
+| `src/main/appRelease.js`, `src/shared/releaseNotes.json` | Bundled bilingual notes and persisted acknowledgement of installed versions.                          |
 | `src/main/startup.js`                          | Native login items or an owned Linux XDG autostart entry.                                                   |
 | `src/renderer/`                                | English/Finnish UI, themes, queue/history selection and accessible controls.                                |
 
@@ -51,6 +52,14 @@ The main process selects the profile, checks the config before opening
 then restores the queue once with scheduling initially stopped. Settings are
 applied before processing starts. Renderer reload requests current state instead
 of restoring the queue again. A single-instance lock focuses the existing app.
+
+`package.json` supplies the application, header, window-title and installer
+version. Installed builds keep a small `releaseState` record separately from
+download settings, with the known previous version and acknowledgement. Missing
+legacy markers never imply a guessed previous version. Source runs expose local
+notes without modifying the installed-version marker. Acknowledgement persists
+before the notice disappears and is not blocked by active downloads. Notes are
+bundled text, separate from remote updater release notes.
 
 `VIDEONINJA_USER_DATA` selects an isolated absolute profile directory;
 `VIDEONINJA_TOOLS_DIR` selects an isolated managed-tool directory. Tool probes are

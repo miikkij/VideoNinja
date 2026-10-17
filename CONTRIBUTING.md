@@ -2,7 +2,7 @@
 
 Start with the [architecture](docs/ARCHITECTURE.md) and the
 [development plan](docs/DEVELOPMENT_PLAN.md). The source tree is the unreleased
-1.2.0 development version; public downloads remain at 1.1.0. The implementation
+1.2 development series; public downloads remain at 1.1.0. The implementation
 record distinguishes completed code, local evidence and outstanding release work.
 
 ## Development environment
@@ -48,6 +48,7 @@ state without restoring or starting the queue twice.
 | `pnpm build:mac`                  | Build macOS DMG and ZIP packages, without publishing.                                     |
 | `pnpm build:linux`                | Build Linux AppImage and Debian packages, without publishing.                             |
 | `pnpm release:verify --artifacts` | Check native package versions, update manifests/hashes and packaged update configuration. |
+| `pnpm version:next patch`         | Advance the application version after preparing matching bilingual release notes.         |
 | `pnpm format`                     | Rewrite formatting throughout `src/`; keep broad reformatting separate from fixes.        |
 | `pnpm clean`                      | Delete generated `dist/` and `node_modules/.cache`.                                       |
 
@@ -180,11 +181,41 @@ packaged/native-package smoke and artifact validation on all three operating sys
 creates a **draft** GitHub release for review. It does not publish that draft.
 Do not create a release tag merely to test packaging.
 
+### Versioning installed updates
+
+`package.json#version` is the canonical application version used by the UI, window
+title and installers. Advance it before delivering changed application code or
+installing a changed build locally. Documentation-only and test-only changes do
+not need a version bump. Use `patch` for fixes, `minor` for compatible features and
+`major` for breaking changes; an explicit higher `x.y.z` is also accepted.
+
+First add the intended version to the beginning of
+[`src/shared/releaseNotes.json`](src/shared/releaseNotes.json) and update
+[`CHANGELOG.md`](CHANGELOG.md). The JSON uses `schemaVersion: 1` and a newest-first
+`releases` array. Each entry has a unique stable `version`, a real `YYYY-MM-DD`
+`date` and `notes.en` and `notes.fi` arrays of 1–20 nonempty notes, each at most
+600 characters after trimming. Describe the actual user-facing
+changes in both languages. Then run:
+
+```sh
+pnpm version:next patch
+pnpm release:verify
+```
+
+The version command refuses no-op/downgrade requests and requires the latest notes
+to match the target version before atomically updating only `package.json#version`.
+It preserves other package fields and does not modify dependencies, the lockfile,
+notes or Git history. Review and commit those version and notes changes together.
+`release:verify` checks that the source version, latest bilingual notes and any
+release tag agree, even before dependencies are installed. `--artifacts` adds the
+native package checks. A version bump creates no tag or public release; publishing
+still requires the owner's release instructions.
+
 Before publishing a release:
 
 1. Review dependency changes and the complete audit output; rerun
    `pnpm install --frozen-lockfile`, `pnpm check` and `pnpm run audit`.
-2. Update the package version and changelog; commit the lockfile for dependency changes.
+2. Complete the version and bilingual-notes workflow above; commit the lockfile for dependency changes.
 3. Confirm CI on the exact commit and run the media smoke with recorded tool versions.
 4. Validate installation, launch, actual downloads, media opening, startup
    registration and uninstall on each supported platform and architecture.

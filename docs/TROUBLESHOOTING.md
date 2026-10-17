@@ -1,6 +1,6 @@
 # Troubleshooting
 
-These instructions describe **1.2.0 development**. Public 1.1 packages do not
+These instructions describe the **1.2 development series**. Public 1.1 packages do not
 contain the new controls. For those packages, use the
 [1.1 quick start](https://github.com/miikkij/VideoNinja/blob/v1.1.0/QUICK_START.md).
 For current source, start with [Quick Start](../QUICK_START.md).

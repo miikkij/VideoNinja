@@ -1,9 +1,18 @@
 # Service download guide
 
-This guide covers the **1.2.0 development version**. Start with the
+This guide covers the **1.2 development series**. Start with the
 [quick start](../QUICK_START.md) or [suomenkielinen pikaohje](../QUICK_START.fi.md)
 for ordinary downloads, playlists and queue controls. Public 1.1 packages do not
 include the managed-tool controls described here.
+
+## Identify an installed update
+
+The header and window title show the same version as the installer. Starting with
+1.2.1, each newly installed version shows its English/Finnish What's new notes.
+Use **Got it** to acknowledge them; the choice survives restarts. The header's
+**What's new** button reopens the notes later. An older installation without a
+version marker is shown without guessing its previous version. Application
+versions and yt-dlp's separate Stable/Nightly versions identify different updates.
 
 ## Update the downloader first
 

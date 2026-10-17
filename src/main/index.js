@@ -27,6 +27,8 @@ const { createAppUpdater } = require('./appUpdater');
 const { createToolManager } = require('./toolManager');
 const { createToolMaintenance } = require('./toolMaintenance');
 const { createSiteCompatibility } = require('./siteCompatibility');
+const { createAppRelease } = require('./appRelease');
+const releaseNotes = require('../shared/releaseNotes.json');
 const {
   readConfiguration,
   loadPersistedState,
@@ -80,6 +82,7 @@ let toolManager;
 let toolMaintenance;
 let siteCompatibility;
 let appUpdater;
+let appRelease;
 let notifications;
 let personalityEvents;
 let updateTimer;
@@ -203,7 +206,7 @@ function createWindow() {
     minWidth: 420,
     minHeight: 420,
     show: false,
-    title: 'VideoNinja',
+    title: `VideoNinja v${app.getVersion()}`,
     icon: ICONS.icon,
     autoHideMenuBar: true,
     webPreferences: {
@@ -217,6 +220,7 @@ function createWindow() {
     },
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.on('page-title-updated', (event) => event.preventDefault());
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
   mainWindow.webContents.session.setPermissionRequestHandler((contents, permission, callback) => {
@@ -278,6 +282,13 @@ async function initialize() {
   warnings = [...restored.warnings, ...state.warnings];
   store.set('schemaVersion', 1);
   store.set('settings', settings);
+  appRelease = createAppRelease({
+    version: app.getVersion(),
+    installed: app.isPackaged,
+    notes: releaseNotes,
+    load: () => store.get('releaseState'),
+    save: (value) => store.set('releaseState', value),
+  });
   const configuredToolsDir = process.env.VIDEONINJA_TOOLS_DIR;
   if (configuredToolsDir && !path.isAbsolute(configuredToolsDir))
     throw new Error('The managed tools path must be absolute.');
@@ -371,6 +382,7 @@ async function initialize() {
     siteCompatibility,
     getToolMaintenance: () => toolMaintenance,
     appUpdater,
+    appRelease,
     privacyStatus: () => store.status(),
     hasToolCheck: () => Boolean(toolCheck),
     isInstallingUpdate: () => installingUpdate,
@@ -404,6 +416,7 @@ async function initialize() {
         warnings,
         privacy: store.status(),
         appUpdate: updateState,
+        appRelease: appRelease.getState(),
       };
     },
   });

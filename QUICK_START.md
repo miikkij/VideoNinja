@@ -2,7 +2,7 @@
 
 [Suomeksi](QUICK_START.fi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-This guide describes **1.2.0 development**, available from
+This guide describes the **1.2 development series**, available from
 [source](README.md#run-from-source). The public
 [1.1.0 downloads](README.md#download-videoninja-110) remain available for Windows
 x64, macOS Apple Silicon and Linux x64. Those packages are unsigned and macOS is

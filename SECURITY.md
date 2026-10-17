@@ -11,7 +11,7 @@ or documented support window for historical branches.
 
 ## Application boundaries
 
-These notes describe **1.2.0 development**. Published 1.1.0 packages do not contain
+These notes describe the **1.2 development series**. Published 1.1.0 packages do not contain
 the new encryption, tool manager or application updater.
 
 The renderer is sandboxed and context-isolated with Node integration disabled.

@@ -9,23 +9,25 @@ import updates from '../../src/main/appUpdater.js';
 import personality from '../../src/main/personalityEvents.js';
 import toolMaintenance from '../../src/main/toolMaintenance.js';
 import siteCompatibility from '../../src/main/siteCompatibility.js';
+import appReleaseModule from '../../src/main/appRelease.js';
 
 const require = createRequire(import.meta.url);
 const indexPath = path.resolve('src/main/index.js');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-async function fixture(env = {}, nativeUpdater = null) {
+async function fixture(env = {}, nativeUpdater = null, release = {}) {
   const app = Object.assign(new EventEmitter(), {
-    isPackaged: false,
+    isPackaged: release.installed === true,
     getPath: () => path.resolve('isolated-index-fixture'),
-    getVersion: () => '1.2.0',
+    getVersion: () => release.version || '1.2.0',
     requestSingleInstanceLock: () => true,
     whenReady: () => new Promise(() => {}),
     quit: vi.fn(),
   });
   class Window extends EventEmitter {
-    constructor() {
+    constructor(options) {
       super();
+      this.options = options;
       this.webContents = Object.assign(new EventEmitter(), {
         setWindowOpenHandler() {},
         send: vi.fn(),
@@ -39,7 +41,7 @@ async function fixture(env = {}, nativeUpdater = null) {
   }
   class Store {
     constructor() {
-      this.values = {};
+      this.values = release.state ? { releaseState: release.state } : {};
     }
     get(key) {
       return this.values[key];
@@ -75,6 +77,17 @@ async function fixture(env = {}, nativeUpdater = null) {
       dialog: {},
     },
     'electron-store': Store,
+    'electron-updater': { autoUpdater: null },
+    '../shared/releaseNotes.json': {
+      schemaVersion: 1,
+      releases: [
+        {
+          version: '1.2.1',
+          date: '2026-10-18',
+          notes: { en: ['New version.'], fi: ['Uusi versio.'] },
+        },
+      ],
+    },
     'node:fs': {
       readFileSync() {
         throw new Error('No packaged policy in source fixture.');
@@ -122,6 +135,7 @@ async function fixture(env = {}, nativeUpdater = null) {
     './toolManager': { createToolManager },
     './toolMaintenance': toolMaintenance,
     './siteCompatibility': siteCompatibility,
+    './appRelease': appReleaseModule,
     './persistence': {
       readConfiguration: async () => ({ warnings: [] }),
       loadPersistedState: () => ({
@@ -173,6 +187,39 @@ async function fixture(env = {}, nativeUpdater = null) {
 }
 
 describe('main lifecycle integration', () => {
+  it('uses the running version for the title and reads acknowledgement after awaited initial-state work', async () => {
+    const { callbacks, updater, queue } = await fixture({}, null, {
+      installed: true,
+      version: '1.2.1',
+      state: { version: '1.2.0', previousVersion: null, acknowledged: true },
+    });
+    expect(callbacks.getWindow().options.title).toBe('VideoNinja v1.2.1');
+    const titleEvent = { preventDefault: vi.fn() };
+    callbacks.getWindow().emit('page-title-updated', titleEvent);
+    expect(titleEvent.preventDefault).toHaveBeenCalledOnce();
+    expect(callbacks.appRelease.getState()).toMatchObject({
+      showNotice: true,
+      previousVersion: '1.2.0',
+    });
+    let finish;
+    updater.action.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = callbacks.getInitialState();
+    callbacks.appRelease.acknowledge('1.2.1');
+    finish({ status: 'idle' });
+    const value = await pending;
+    expect(value.version).toBe('1.2.1');
+    expect(value.appRelease).toMatchObject({
+      version: '1.2.1',
+      showNotice: false,
+      previousVersion: '1.2.0',
+    });
+    await queue.shutdown();
+  });
   it('respects an explicit isolated managed-tools directory for manager and downloader discovery', async () => {
     const isolatedTools = path.resolve('isolated-test-tools');
     const { queue, createToolManager, env } = await fixture({

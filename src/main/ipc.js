@@ -251,6 +251,23 @@ function createHandlers(deps) {
 
   const handlers = {
     getInitialState: () => deps.getInitialState(),
+    acknowledgeAppRelease: (input) => {
+      record(input, ['version']);
+      if (
+        typeof input.version !== 'string' ||
+        !deps.appRelease ||
+        input.version !== deps.appRelease.getState().version
+      )
+        throw new UserError('Choose the currently running application version.', 'INVALID_VERSION');
+      try {
+        return deps.appRelease.acknowledge(input.version);
+      } catch {
+        throw new UserError(
+          'The update acknowledgement could not be saved. Try again.',
+          'RELEASE_ACK_FAILED',
+        );
+      }
+    },
     recheckTools: () => {
       ready();
       return deps.recheckTools();

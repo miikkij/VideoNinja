@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld(
   'videoNinja',
   Object.freeze({
     getInitialState: () => invoke('getInitialState'),
+    acknowledgeAppRelease: (request) => invoke('acknowledgeAppRelease', request),
     recheckTools: () => invoke('recheckTools'),
     chooseDownloadDirectory: () => invoke('chooseDownloadDirectory'),
     chooseCookieFile: () => invoke('chooseCookieFile'),

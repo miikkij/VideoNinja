@@ -55,6 +55,10 @@
   };
   let privacy = {};
   let appUpdateState = { status: 'idle' };
+  let appRelease = null;
+  let installedNotesVisible = false;
+  let releaseBusy = false;
+  let releaseAcknowledgementFailed = false;
   let updateBusy = false;
   let toolBusy = false;
   let toolSetup = null;
@@ -101,6 +105,60 @@
     $('notice').classList.toggle('is-error', error);
     $('notice').hidden = false;
     announce(message);
+  }
+  function renderInstalledRelease() {
+    $('installed-notes-toggle').disabled = !appRelease;
+    $('installed-release').hidden = !appRelease || !installedNotesVisible;
+    if (!appRelease) return;
+    $('installed-release-heading').textContent = t('installedVersion', {
+      version: appRelease.version,
+    });
+    $('installed-release-previous').hidden =
+      !appRelease.previousVersion || appRelease.previousVersion === appRelease.version;
+    $('installed-release-previous').textContent = appRelease.previousVersion
+      ? t('previousVersion', { version: appRelease.previousVersion })
+      : '';
+    $('acknowledge-release').textContent = t(
+      releaseBusy ? 'saving' : appRelease.showNotice ? 'acknowledgeRelease' : 'close',
+    );
+    $('acknowledge-release').disabled = releaseBusy;
+    const language = i18n.locale() === 'fi-FI' ? 'fi' : 'en';
+    const notes = appRelease.notes?.[language];
+    const items = Array.isArray(notes)
+      ? notes.filter((item) => typeof item === 'string').slice(0, 30)
+      : [];
+    $('installed-notes-list').replaceChildren();
+    for (const note of items) create('li', '', $('installed-notes-list')).textContent = note;
+    $('installed-notes-list').hidden = !items.length;
+    $('installed-notes-empty').hidden = Boolean(items.length);
+    $('installed-release-error').hidden = !releaseAcknowledgementFailed;
+    $('installed-release-error').textContent = releaseAcknowledgementFailed
+      ? t('releaseAcknowledgementFailed')
+      : '';
+  }
+  async function acknowledgeRelease() {
+    if (!appRelease || releaseBusy) return;
+    if (!appRelease.showNotice) {
+      installedNotesVisible = false;
+      renderInstalledRelease();
+      $('installed-notes-toggle').focus();
+      return;
+    }
+    releaseBusy = true;
+    releaseAcknowledgementFailed = false;
+    renderInstalledRelease();
+    try {
+      const result = await request('acknowledgeAppRelease', { version: appRelease.version });
+      if (result?.acknowledged !== true) throw new Error(t('releaseAcknowledgementFailed'));
+      appRelease.showNotice = false;
+      installedNotesVisible = false;
+      $('installed-notes-toggle').focus();
+    } catch {
+      releaseAcknowledgementFailed = true;
+    } finally {
+      releaseBusy = false;
+      renderInstalledRelease();
+    }
   }
   function personalityQuotes(kind) {
     const language = i18n.locale() === 'fi-FI' ? 'fi' : 'en';
@@ -432,6 +490,7 @@
     renderPolicySettings();
     renderProfiles();
     renderAppUpdate();
+    renderInstalledRelease();
     $('download-path').value = settings.downloadPath || '';
     $('cookie-source').value = settings.cookieSource || '';
     $('cookie-file').value = settings.cookieFilePath || '';
@@ -1760,6 +1819,12 @@
       warnings = state.warnings || [];
       privacy = state.privacy || {};
       appUpdateState = state.appUpdate || appUpdateState;
+      appRelease =
+        state.version && state.appRelease?.version === state.version
+          ? { ...state.appRelease }
+          : null;
+      installedNotesVisible = Boolean(appRelease?.showNotice);
+      releaseAcknowledgementFailed = false;
       toolSetup = state.tools?.setup || state.setup || null;
       $('app-version').textContent = state.version ? `v${state.version}` : '';
       $('startup').checked = Boolean(state.startupEnabled);
@@ -1776,6 +1841,17 @@
   }
 
   listen($('ninja-icon'), 'click', () => showPersonality('ninja'));
+  listen($('installed-notes-toggle'), 'click', () => {
+    if (!appRelease) return;
+    installedNotesVisible = true;
+    $('installed-notes').open = true;
+    renderInstalledRelease();
+    $('installed-release-heading').focus();
+    $('installed-release').scrollIntoView?.({ block: 'nearest' });
+  });
+  listen($('acknowledge-release'), 'click', () => {
+    void acknowledgeRelease();
+  });
   listen($('camera-icon'), 'click', () => {
     clearTimeout(cameraTimer);
     $('camera-icon').classList.remove('camera-flash');

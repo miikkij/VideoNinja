@@ -91,6 +91,30 @@ async function waitHistory(page, count) {
 }
 try {
   let page = await launch();
+  const firstRelease = (await state(page)).appRelease;
+  assert.equal(firstRelease.version, (await state(page)).version);
+  assert.equal(
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle()),
+    `VideoNinja v${firstRelease.version}`,
+  );
+  assert.equal(firstRelease.showNotice, packaged);
+  assert.equal(await page.locator('#installed-release').isVisible(), packaged);
+  if (packaged) {
+    await page.locator('#acknowledge-release').click();
+    await page.locator('#installed-release').waitFor({ state: 'hidden' });
+    assert.equal((await state(page)).appRelease.showNotice, false);
+    assert.equal(await page.locator('#installed-release').isVisible(), false);
+  }
+  await page.locator('#installed-notes-toggle').click();
+  assert.equal(await page.locator('#installed-release').isVisible(), true);
+  assert.equal(await page.locator('#installed-notes').evaluate((node) => node.open), true);
+  assert.ok((await page.locator('#installed-notes-list > li').count()) > 0);
+  assert.match(
+    await page.locator('#installed-release-heading').textContent(),
+    new RegExp(firstRelease.version.replaceAll('.', '\\.')),
+  );
+  await page.locator('#acknowledge-release').click();
+  assert.equal(await page.locator('#installed-release').isVisible(), false);
   await application.evaluate(({ app, dialog, shell }, folder) => {
     const tools = process.mainModule.require(app.getAppPath() + '/src/main/ytdlp.js');
     const fileSystem = process.mainModule.require('node:fs');
@@ -440,6 +464,17 @@ try {
   assert.equal(restored.settings.globalRateKbps, 512);
   assert.equal(restored.settings.ytdlpChannel, 'stable');
   assert.equal(restored.settings.autoToolUpdates, false);
+  assert.equal(restored.appRelease.version, restored.version);
+  assert.equal(restored.appRelease.showNotice, false);
+  assert.equal(await page.locator('#installed-release').isVisible(), false);
+  await page.locator('#installed-notes-toggle').click();
+  assert.equal(await page.locator('#installed-release').isVisible(), true);
+  assert.equal(
+    await page.locator('#installed-notes > summary').textContent(),
+    'Tämän version muutokset',
+  );
+  assert.equal(await page.locator('#acknowledge-release').textContent(), 'Sulje');
+  await page.locator('#acknowledge-release').click();
   assert.deepEqual((await page.evaluate(() => window.videoNinja.getSiteCompatibility())).data, []);
   assert.equal(restored.queue.history.length, 5);
   assert.equal(restored.privacy.encrypted, encryption);
@@ -449,7 +484,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    `Feature smoke passed: profiles, exact formats, subtitles, archive, playlist paging/search/ranges, bulk actions, selective history, private session, theme, browser modes/challenge recovery, explicit source links, tool channel, maintenance opt-in, compatibility cache and persisted restart. OS encryption: ${encryption ? 'round-trip verified' : 'unavailable (correctly disabled)'}.`,
+    `Feature smoke passed: profiles, exact formats, subtitles, archive, playlist paging/search/ranges, bulk actions, selective history, private session, theme, browser modes/challenge recovery, explicit source links, tool channel, maintenance opt-in, compatibility cache, local version notes and persisted restart. Release acknowledgment: ${packaged ? 'installed notice/restart verified' : 'source notice correctly suppressed'}. OS encryption: ${encryption ? 'round-trip verified' : 'unavailable (correctly disabled)'}.`,
   );
 } finally {
   if (application) await application.close();

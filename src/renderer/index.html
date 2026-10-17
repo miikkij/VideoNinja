@@ -64,6 +64,15 @@
           </button>
           <button
             type="button"
+            id="installed-notes-toggle"
+            aria-controls="installed-release"
+            data-i18n="installedWhatsNew"
+            disabled
+          >
+            What's new
+          </button>
+          <button
+            type="button"
             id="hide-window"
             data-i18n="hideWindow"
             data-i18n-title="hideWindowHint"
@@ -89,6 +98,28 @@
       </nav>
       <main>
         <p id="loading" role="status" data-i18n="loading">Getting ready…</p>
+        <section
+          id="installed-release"
+          class="panel installed-release"
+          aria-labelledby="installed-release-heading"
+          hidden
+        >
+          <div class="section-heading">
+            <h2 id="installed-release-heading" tabindex="-1"></h2>
+            <button type="button" id="acknowledge-release" data-i18n="acknowledgeRelease">
+              Got it
+            </button>
+          </div>
+          <p id="installed-release-previous" class="muted" hidden></p>
+          <details id="installed-notes">
+            <summary data-i18n="installedNotes">What's new in this version</summary>
+            <ul id="installed-notes-list"></ul>
+            <p id="installed-notes-empty" class="hint" data-i18n="installedNotesEmpty" hidden>
+              No local release notes are included for this version.
+            </p>
+          </details>
+          <p id="installed-release-error" class="field-error" role="alert" hidden></p>
+        </section>
         <section id="warnings" class="notice is-error" role="alert" hidden>
           <p id="warnings-message"></p>
         </section>
@@ -485,7 +516,7 @@
               resumed afterward.
             </p>
             <details id="release-notes" hidden>
-              <summary data-i18n="releaseNotes">What's new</summary>
+              <summary data-i18n="releaseNotes">Update release notes</summary>
               <pre id="release-notes-text" class="release-notes"></pre>
             </details>
           </details>

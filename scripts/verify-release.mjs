@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { parseVersion, readReleaseNotes } from './release-notes.mjs';
 
 const script = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(script), '..');
@@ -190,11 +191,11 @@ export async function verifyRelease({
   env = process.env,
 } = {}) {
   const pkg = readDocument(path.join(root, 'package.json'), true);
-  if (typeof pkg.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(pkg.version))
-    throw new Error('A stable source package version is required.');
+  parseVersion(pkg.version);
   const tag = env.GITHUB_REF_TYPE === 'tag' ? env.GITHUB_REF_NAME : env.RELEASE_TAG;
   if (tag && tag !== `v${pkg.version}`)
     throw new Error(`Release tag must be v${pkg.version}, received ${tag}.`);
+  readReleaseNotes(root, pkg.version);
   if (!artifacts) return pkg.version;
   // The workflow checks the source version before installing dependencies.
   yaml ||= (await import('js-yaml')).default;

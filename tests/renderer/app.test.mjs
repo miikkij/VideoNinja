@@ -75,6 +75,7 @@ async function boot(overrides = {}) {
     'toolMaintenance',
     'getSiteCompatibility',
     'clearSiteCompatibility',
+    'acknowledgeAppRelease',
   ])
     api[method] = vi.fn(async () => ok(null));
   api.getInitialState = vi.fn(async () => ok(state));
@@ -123,6 +124,166 @@ afterEach(() => {
 });
 
 describe('production renderer', () => {
+  it.each(['en', 'fi'])(
+    'shows installed local release notes in %s without a modal, network check or automatic acknowledgment',
+    async (language) => {
+      const hostile = '<img src=x onerror="window.releaseAttack=true">';
+      const { api, events } = await boot({
+        version: '1.2.1',
+        settings: { language, downloadPath: '/downloads' },
+        appRelease: {
+          version: '1.2.1',
+          previousVersion: '1.2.0',
+          showNotice: true,
+          notes: {
+            en: ['Clearer recovery steps', hostile],
+            fi: ['Selkeämmät palautumisohjeet', hostile],
+          },
+        },
+      });
+      const t = window.VideoNinjaI18n.t;
+      expect($('app-version').textContent).toBe('v1.2.1');
+      expect($('installed-release').hidden).toBe(false);
+      expect($('installed-release-heading').textContent).toBe(
+        t('installedVersion', { version: '1.2.1' }),
+      );
+      expect($('installed-release-previous').textContent).toBe(
+        t('previousVersion', { version: '1.2.0' }),
+      );
+      expect($('installed-notes').open).toBe(false);
+      expect(document.querySelector('dialog[open]')).toBeNull();
+      expect(document.activeElement).not.toBe($('installed-release-heading'));
+      expect(api.acknowledgeAppRelease).not.toHaveBeenCalled();
+      expect(api.appUpdate).not.toHaveBeenCalled();
+      expect(api.openExternal).not.toHaveBeenCalled();
+      $('installed-notes-toggle').click();
+      expect($('installed-notes').open).toBe(true);
+      expect(document.activeElement).toBe($('installed-release-heading'));
+      expect($('installed-notes-list').children[0].textContent).toBe(
+        language === 'fi' ? 'Selkeämmät palautumisohjeet' : 'Clearer recovery steps',
+      );
+      expect($('installed-notes-list').children[1].textContent).toBe(hostile);
+      expect($('installed-release').querySelector('img')).toBeNull();
+      expect(window.releaseAttack).toBeUndefined();
+      events.onAppUpdate({
+        status: 'available',
+        version: '1.3.0',
+        releaseNotes: 'Remote release changes',
+      });
+      expect($('release-notes-text').textContent).toBe('Remote release changes');
+      expect($('installed-notes-list').textContent).not.toContain('Remote release changes');
+      $('language').value = language === 'fi' ? 'en' : 'fi';
+      $('language').dispatchEvent(new Event('change'));
+      expect($('installed-notes').open).toBe(true);
+      expect($('installed-notes-list').children[0].textContent).toBe(
+        language === 'fi' ? 'Clearer recovery steps' : 'Selkeämmät palautumisohjeet',
+      );
+      expect(api.acknowledgeAppRelease).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps an unacknowledged release visible on save failure and dismisses only an accepted acknowledgment', async () => {
+    const { api } = await boot({
+      version: '1.2.1',
+      appRelease: {
+        version: '1.2.1',
+        previousVersion: null,
+        showNotice: true,
+        notes: { en: ['Local changes'], fi: ['Paikalliset muutokset'] },
+      },
+    });
+    expect($('installed-release-previous').hidden).toBe(true);
+    api.hideWindow.mockResolvedValue({ ok: false, error: { code: 'TRAY_UNAVAILABLE' } });
+    $('hide-window').click();
+    await vi.waitFor(() => expect($('notice').hidden).toBe(false));
+    const importantNotice = $('notice-message').textContent;
+    let complete;
+    api.acknowledgeAppRelease.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    $('acknowledge-release').click();
+    $('acknowledge-release').click();
+    expect($('acknowledge-release').disabled).toBe(true);
+    expect($('installed-release').hidden).toBe(false);
+    await vi.waitFor(() => expect(api.acknowledgeAppRelease).toHaveBeenCalledTimes(1));
+    expect(api.acknowledgeAppRelease).toHaveBeenCalledWith({ version: '1.2.1' });
+    complete({ ok: false, error: { code: 'OPERATION_FAILED', message: 'Disk unavailable' } });
+    await vi.waitFor(() => expect($('installed-release-error').hidden).toBe(false));
+    expect($('installed-release').hidden).toBe(false);
+    expect($('acknowledge-release').disabled).toBe(false);
+    expect($('notice-message').textContent).toBe(importantNotice);
+    $('ninja-icon').click();
+    expect(document.querySelectorAll('.personality-toast')).toHaveLength(1);
+    expect($('installed-release').hidden).toBe(false);
+    $('language').value = 'fi';
+    $('language').dispatchEvent(new Event('change'));
+    expect($('installed-release-error').textContent).toBe(
+      window.VideoNinjaI18n.t('releaseAcknowledgementFailed'),
+    );
+    api.acknowledgeAppRelease.mockResolvedValueOnce(ok({ acknowledged: false }));
+    $('acknowledge-release').click();
+    await vi.waitFor(() => expect($('installed-release-error').hidden).toBe(false));
+    expect($('installed-release').hidden).toBe(false);
+    api.acknowledgeAppRelease.mockResolvedValueOnce(ok({ acknowledged: true }));
+    $('acknowledge-release').click();
+    await vi.waitFor(() => expect($('installed-release').hidden).toBe(true));
+    expect(document.activeElement).toBe($('installed-notes-toggle'));
+    expect($('notice-message').textContent).toBe(importantNotice);
+    $('installed-notes-toggle').click();
+    expect($('installed-release').hidden).toBe(false);
+    expect($('installed-notes').open).toBe(true);
+    expect($('acknowledge-release').textContent).toBe(window.VideoNinjaI18n.t('close'));
+    $('acknowledge-release').click();
+    expect($('installed-release').hidden).toBe(true);
+    expect(api.acknowledgeAppRelease).toHaveBeenCalledTimes(3);
+    expect(
+      api.saveSettings.mock.calls.every(([input]) => !Object.hasOwn(input, 'appRelease')),
+    ).toBe(true);
+  });
+
+  it('reopens already acknowledged local notes without writing a new acknowledgment', async () => {
+    const { api } = await boot({
+      version: '1.2.1',
+      appRelease: {
+        version: '1.2.1',
+        previousVersion: '1.2.0',
+        showNotice: false,
+        notes: { en: ['Installed notes'], fi: ['Asennetun version muutokset'] },
+      },
+    });
+    expect($('installed-release').hidden).toBe(true);
+    expect($('installed-notes-toggle').disabled).toBe(false);
+    $('installed-notes-toggle').click();
+    expect($('installed-release').hidden).toBe(false);
+    expect($('installed-notes-list').textContent).toBe('Installed notes');
+    expect(document.activeElement).toBe($('installed-release-heading'));
+    $('acknowledge-release').click();
+    expect($('installed-release').hidden).toBe(true);
+    expect(document.activeElement).toBe($('installed-notes-toggle'));
+    expect(api.acknowledgeAppRelease).not.toHaveBeenCalled();
+    expect(api.appUpdate).not.toHaveBeenCalled();
+  });
+
+  it('uses the canonical installed version and does not display mismatched release data', async () => {
+    const { api } = await boot({
+      version: '1.2.1',
+      appRelease: {
+        version: '1.3.0',
+        previousVersion: '1.2.0',
+        showNotice: true,
+        notes: { en: ['Not the installed version'], fi: [] },
+      },
+    });
+    expect($('app-version').textContent).toBe('v1.2.1');
+    expect($('installed-release').hidden).toBe(true);
+    expect($('installed-notes-toggle').disabled).toBe(true);
+    expect($('installed-notes-list').textContent).toBe('');
+    expect(api.acknowledgeAppRelease).not.toHaveBeenCalled();
+  });
+
   it('restores ninja quotes in the selected language without replacing important notices', async () => {
     const { api } = await boot();
     const english = window.VideoNinjaQuotes.en.ninja;
