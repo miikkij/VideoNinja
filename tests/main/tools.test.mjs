@@ -1,9 +1,113 @@
 import { describe, it, expect, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { EventEmitter } from 'node:events';
 import toolsModule from '../../src/main/tools.js';
 
 const { createToolService } = toolsModule;
+
+describe('browser impersonation capabilities', () => {
+  const tool = { available: true, path: 'C:\\Tools\\yt-dlp.exe', version: '2026.10.14' };
+  it('parses actual target rows, ignores unavailable rows and caches by executable/version', async () => {
+    const execFile = vi.fn(async () => ({
+      stdout:
+        '[info] Available impersonate targets\nClient OS Source\nChrome-133 Macos-15 curl_cffi\nSafari-17.2 Ios-17.2 curl_cffi\nFirefox-133 Macos-14 curl_cffi (not available)\ninvalid diagnostic',
+      stderr: '',
+    }));
+    const service = createToolService({ platform: 'win32', execFile });
+    expect(await service.checkImpersonation(tool)).toEqual({
+      available: true,
+      targets: ['Chrome-133:Macos-15', 'Safari-17.2:Ios-17.2'],
+    });
+    const cached = await service.checkImpersonation(tool);
+    cached.targets.push('tampered');
+    expect((await service.checkImpersonation(tool)).targets).toHaveLength(2);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0][1]).toEqual([
+      '--ignore-config',
+      '--no-plugin-dirs',
+      '--no-remote-components',
+      '--no-js-runtimes',
+      '--color',
+      'never',
+      '--list-impersonate-targets',
+    ]);
+    expect(execFile.mock.calls[0][2]).toMatchObject({
+      shell: false,
+      timeout: 5000,
+      maxBuffer: 128 * 1024,
+      cwd: 'C:\\Tools',
+    });
+    await service.checkImpersonation({ ...tool, version: '2026.10.15' });
+    await service.checkImpersonation({ ...tool, path: 'C:\\Other\\yt-dlp.exe' });
+    expect(execFile).toHaveBeenCalledTimes(3);
+  });
+  it('leaves unsupported or failed probes optional and retries transient failures on the next check', async () => {
+    const execFile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('timed out'))
+      .mockResolvedValue({ stdout: 'Chrome-133 Macos-15 curl_cffi' });
+    const service = createToolService({ platform: 'win32', execFile });
+    expect(await service.checkImpersonation(tool)).toEqual({ available: false, targets: [] });
+    expect((await service.checkImpersonation(tool)).available).toBe(true);
+    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(await service.checkImpersonation({ available: false })).toEqual({
+      available: false,
+      targets: [],
+    });
+  });
+  it('bounds targets and does not mistake an unavailable library for support', async () => {
+    const execFile = vi.fn(async () => ({
+      stdout: 'Chrome-133 Macos-15 curl_cffi (not available)',
+    }));
+    const service = createToolService({ platform: 'win32', execFile });
+    expect((await service.checkImpersonation(tool)).available).toBe(false);
+    execFile.mockResolvedValue({
+      stdout: Array.from(
+        { length: 101 },
+        (_, index) => `Chrome-${index} Windows-10 curl_cffi`,
+      ).join('\n'),
+    });
+    expect(
+      (await service.checkImpersonation({ ...tool, version: '2026.10.15' })).targets,
+    ).toHaveLength(100);
+  });
+  it('awaits the aborted probe child close and does not cache its result', async () => {
+    const controller = new AbortController();
+    const child = new EventEmitter();
+    let rejectProbe;
+    const probe = new Promise((_resolve, reject) => {
+      rejectProbe = reject;
+    });
+    probe.child = child;
+    const execFile = vi
+      .fn()
+      .mockReturnValueOnce(probe)
+      .mockResolvedValue({ stdout: 'Chrome-133 Macos-15 curl_cffi' });
+    const service = createToolService({ platform: 'win32', execFile });
+    let settled = false;
+    const pending = service.checkImpersonation(tool, { signal: controller.signal });
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    controller.abort();
+    rejectProbe(new Error('aborted'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    child.emit('close');
+    await rejection;
+    expect((await service.checkImpersonation(tool)).available).toBe(true);
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+});
+
 function serviceWith(files, platform = 'win32', overrides = {}) {
   const fs = {
     realpath: vi.fn(async (file) => {

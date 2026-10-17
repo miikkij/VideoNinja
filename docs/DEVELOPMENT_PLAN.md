@@ -69,6 +69,40 @@ asennuksen jälkeisiä toimintoja.
 
 ## Ylläpito ja julkaisemisen ehdot
 
+### Latausvirheiden automaatio, 17.10.2026
+
+Kuusi jatkoparannusta ovat mukana 1.2-kehitysversiossa:
+
+1. Tunnistettu Cloudflare-selainhaaste saa yhden yhteensopivuusyrityksen. Sama
+   tila jatkuu metatiedoista varsinaiseen lataukseen ja muodon tarkistukseen.
+2. Selainhaaste, puuttuva selaintuki, kirjautuminen, evästeiden luku, HTTP 429
+   ja muotovirhe saavat omat toimintaohjeensa.
+3. Onnistunut yhteensopivuus muistetaan tarkan sivusto-originin ja yt-dlp-version
+   perusteella seitsemän päivää. Muisti on tyhjennettävissä; yksityiset työt eivät
+   käytä tai täydennä sitä. Evästevalinta pysyy käyttäjällä.
+4. Rajoitettu sivusto saa oman odotusajan ja väliaikaisen yhden latauksen rajan.
+   Muiden sivustojen työt jatkavat vapaissa latauspaikoissa.
+5. Valinnainen päivittäinen työkaluhuolto muistaa kanavan, odottaa tyhjää tai
+   käsin tauotettua jonoa, päivittää vain aiemmin hallitut työkalut ja palauttaa
+   edellisen asennuksen epäonnistuneessa vaihdossa.
+6. Palautuminen ja sivuston odotus näkyvät suomeksi/englanniksi. Tekniset lokit
+   ovat avattavissa, ja lähdesivu avautuu selaimeen vain käyttäjän toiminnosta.
+
+Uusi paikallinen mediatesti tarjoaa itse luodulle videolle ensin Cloudflare-tyylisen
+403-vastauksen ja tarkistaa oikean yt-dlp:n yhden lisäyrityksen, latauksen,
+eheystuloksen ja sivustomuistin käytön. Se ei todista kaikkien livepalvelujen
+haasteiden ratkeamista. Vuorovaikutteinen CAPTCHA ja kirjautuminen voivat edelleen
+vaatia käyttäjän toimia. Ninja-persoonallisuutta ei muuteta.
+
+Paikallinen varmennus: `pnpm check` läpäisi 536 testiä. Oikean median 14 tarkistusta
+käyttivät yt-dlp-versiota 2026.10.10.233141. Electronin lähde- ja pakettitarkistukset
+kattavat uuden asetuksen IPC-polun, kanavan säilymisen, muistiasetuksen tyhjennyksen,
+selainhaasteen virhenäkymän sekä alkuperäiset ninja-/kameratoiminnot. Windows-paketit
+ja niiden tiivisteet tarkistettiin. Kolmen käyttöjärjestelmän tulokset ovat
+commit-kohtaisessa [CI-ajossa](https://github.com/miikkij/VideoNinja/actions/workflows/ci.yml).
+
+### Julkaisun tarkistukset
+
 Node on lukittu versioon **24.22.0** ja pnpm versioon **10.20.0**. Suorita
 `pnpm check`, `pnpm run audit`, `pnpm test:smoke`, `pnpm test:features` ja
 `pnpm test:media`; paketoinnin jälkeen myös paketoidut savut ja

@@ -21,8 +21,8 @@ profile or partial downloads to clear a warning.
 In Settings, review paths/versions and install or update the managed tool. Pause
 queued jobs manually and close previews, then wait for their processes to stop.
 Paused jobs remain in the queue. Jobs paused by the schedule must also be paused
-manually because the schedule could otherwise resume them. Tool changes
-are explicit and do not upgrade global package-manager installations.
+manually because the schedule could otherwise resume them. Manual changes and
+opt-in automatic maintenance do not upgrade global package-manager installations.
 
 Updating VideoNinja does not update a globally installed yt-dlp. A build older
 than 90 days now displays a warning. Select Stable or Nightly in the yt-dlp card
@@ -58,6 +58,26 @@ known executable/platform locations and PATH, not an arbitrary working directory
 Windows expects executables, not shell aliases/batch wrappers. The selected
 ffmpeg/runtime paths are passed explicitly to yt-dlp. Developer isolation uses
 an absolute `VIDEONINJA_TOOLS_DIR`; normal users need not set it.
+
+## Automatic tool maintenance
+
+Automatic tool updates are off by default. When enabled, VideoNinja checks its
+already installed managed tools once per day. A busy queue, exiting process,
+open preview or another tool operation defers the check. Pause jobs manually and
+close previews to make the app idle; jobs and partial files can remain in place.
+
+The last attempt is saved before contacting the server, including failed attempts.
+Restarting does not immediately retry a failed daily check. Review each tool's
+status and use its manual update action if a correction cannot wait. Disabling
+maintenance aborts the current operation and waits for cleanup/rollback.
+
+Missing, external and unsupported managed tools are skipped. An invalid or absent
+`managed.json` also prevents automatic replacement; use explicit installation to
+repair that tool. Changing the yt-dlp channel requests a new check, but an older
+release or changed bytes under the same fixed version require manual review.
+FFmpeg's moving `latest` build is compared by checksum. Earlier successful updates
+remain visible if another tool fails. A rollback failure retains the previous
+installation in its temporary backup directory for recovery; do not delete it.
 
 ## EJS or YouTube challenges
 

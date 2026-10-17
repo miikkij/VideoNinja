@@ -43,6 +43,56 @@ function createToolService(deps = {}) {
   const run = deps.runProcess || runProcess;
   const execPath = deps.execPath || process.execPath;
   const now = deps.now || Date.now;
+  const impersonationCache = new Map();
+
+  async function checkImpersonation(tool, { signal } = {}) {
+    if (signal?.aborted) throw abortError();
+    if (!tool.available) return { available: false, targets: [] };
+    const key = JSON.stringify([tool.path, tool.version]);
+    if (impersonationCache.has(key)) return structuredClone(impersonationCache.get(key));
+    let capability = { available: false, targets: [] };
+    try {
+      const probe = execute(
+        tool.path,
+        [...SAFE_YTDLP_FLAGS, '--no-js-runtimes', '--color', 'never', '--list-impersonate-targets'],
+        {
+          shell: false,
+          windowsHide: true,
+          timeout: 5000,
+          maxBuffer: 128 * 1024,
+          cwd: paths.dirname(tool.path),
+          signal,
+        },
+      );
+      const closed = probe.child
+        ? new Promise((resolve) => probe.child.once('close', resolve))
+        : Promise.resolve();
+      let output;
+      try {
+        output = await probe;
+      } finally {
+        await closed;
+      }
+      const targets = String(output.stdout || '')
+        .split(/\r?\n/u)
+        .flatMap((line) => {
+          const match = /^\s*([A-Za-z][\w.-]{0,60})\s+([\w.-]{1,60})\s+curl_cffi\s*$/u.exec(line);
+          return match ? [`${match[1]}:${match[2]}`] : [];
+        })
+        .slice(0, 100);
+      capability = { available: targets.length > 0, targets };
+    } catch {
+      if (signal?.aborted) throw abortError();
+      // Missing optional support never makes ordinary extraction unavailable.
+      // Do not retain transient process failures until the executable is updated.
+      return capability;
+    }
+    if (signal?.aborted) throw abortError();
+    impersonationCache.set(key, capability);
+    if (impersonationCache.size > 20)
+      impersonationCache.delete(impersonationCache.keys().next().value);
+    return structuredClone(capability);
+  }
 
   function candidates(name) {
     const pathValue = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
@@ -209,6 +259,7 @@ function createToolService(deps = {}) {
       jsRuntimes: runtimeChecks.filter((runtime) => runtime.available),
       runtimeChecks,
       ejs: 'not-checked',
+      impersonation: await checkImpersonation(tool, { signal }),
     };
   }
 
@@ -276,6 +327,7 @@ function createToolService(deps = {}) {
     candidates,
     discover,
     checkJsRuntimes,
+    checkImpersonation,
     checkYtDlpAvailability,
     checkFfmpegAvailability,
     checkFfprobeAvailability,

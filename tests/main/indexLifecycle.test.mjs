@@ -7,6 +7,8 @@ import path from 'node:path';
 import DownloadQueue from '../../src/main/downloadQueue.js';
 import updates from '../../src/main/appUpdater.js';
 import personality from '../../src/main/personalityEvents.js';
+import toolMaintenance from '../../src/main/toolMaintenance.js';
+import siteCompatibility from '../../src/main/siteCompatibility.js';
 
 const require = createRequire(import.meta.url);
 const indexPath = path.resolve('src/main/index.js');
@@ -57,6 +59,7 @@ async function fixture(env = {}, nativeUpdater = null) {
     dispose: vi.fn(async () => {}),
   };
   const tools = {
+    createDownloader: () => tools,
     fetchMetadata: vi.fn(async () => ({})),
     getDiskSpace: vi.fn(async () => ({ available: false })),
     checkYtDlpAvailability: vi.fn(async () => ({ available: true })),
@@ -117,6 +120,8 @@ async function fixture(env = {}, nativeUpdater = null) {
       },
     },
     './toolManager': { createToolManager },
+    './toolMaintenance': toolMaintenance,
+    './siteCompatibility': siteCompatibility,
     './persistence': {
       readConfiguration: async () => ({ warnings: [] }),
       loadPersistedState: () => ({

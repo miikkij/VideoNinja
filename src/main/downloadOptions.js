@@ -16,6 +16,7 @@ const path = require('node:path');
  * @property {boolean} [forceIpv4]
  * @property {string} [extractorArgs] Restricted YouTube player-client selector.
  * @property {'auto'|'deno'|'node'|'quickjs'} [jsRuntime]
+ * @property {'auto'|'off'|'compatible'} [browserMode] Conditional browser impersonation.
  * @property {string|string[]} [extraArgs] Only allowlisted options are accepted.
  */
 
@@ -58,6 +59,7 @@ const OPTION_KEYS = new Set([
   'forceIpv4',
   'extractorArgs',
   'jsRuntime',
+  'browserMode',
   'extraArgs',
 ]);
 const BROWSERS = new Set([
@@ -199,6 +201,11 @@ function normalizeOptions(input = {}) {
   if (typeof quality !== 'string' || !Object.hasOwn(QUALITY_PRESETS, quality))
     throw new Error('Choose a supported quality preset.');
   result.quality = quality;
+  if (input.browserMode !== undefined) {
+    if (!['auto', 'off', 'compatible'].includes(input.browserMode))
+      throw new Error('Choose Auto, Off or Compatible browser mode.');
+    result.browserMode = input.browserMode;
+  }
   if (input.audioFormat !== undefined) {
     if (!['original', 'mp3', 'm4a', 'opus', 'wav'].includes(input.audioFormat))
       throw new Error('Unsupported audio format.');

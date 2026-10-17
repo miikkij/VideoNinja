@@ -42,11 +42,16 @@ function createPrivateStore(store, safeStorage, { platform = process.platform } 
       throw new Error('Invalid encrypted profile. Saved data was preserved.');
     document.settings = { ...decoded.settings, encryptedStorage: true };
     document.queueState = decoded.queueState;
+    document.siteCompatibility = decoded.siteCompatibility;
     delete document.protectedState;
   }
   const commit = (next) => {
     const disk = structuredClone(next);
-    const payload = JSON.stringify({ settings: next.settings, queueState: next.queueState });
+    const payload = JSON.stringify({
+      settings: next.settings,
+      queueState: next.queueState,
+      siteCompatibility: next.siteCompatibility,
+    });
     if (Buffer.byteLength(payload, 'utf8') > MAX_PRIVATE_PAYLOAD_BYTES)
       throw new Error('Profile is too large to save safely. Existing data was preserved.');
     if (next.settings?.encryptedStorage) {
@@ -60,6 +65,7 @@ function createPrivateStore(store, safeStorage, { platform = process.platform } 
       };
       delete disk.settings;
       delete disk.queueState;
+      delete disk.siteCompatibility;
     }
     // conf/electron-store serializes with tab indentation. Include that overhead.
     if (Buffer.byteLength(JSON.stringify(disk, null, '\t'), 'utf8') > MAX_CONFIG_BYTES)

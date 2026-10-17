@@ -799,7 +799,7 @@
     toolStable: 'Stable',
     toolNightly: 'Nightly',
     toolChannelHint:
-      'Start with Stable. Nightly includes newer website fixes and may be less tested. Select a channel, then Install or Update. Switching back to Stable is supported.',
+      'Nightly includes the newest website fixes and may be less tested. Stable updates less often. This saved choice also controls automatic maintenance. Select Install or Update to change the installed version now.',
     toolOldRelease:
       'This yt-dlp release is {days} days old. Website changes may require a newer version. Use Update below if a supported link fails.',
     remedy_ACCESS:
@@ -818,7 +818,7 @@
     accessCookiesHelp:
       'If the video plays in the browser but needs a login, choose that browser below, or choose a Netscape cookie file exported from the signed-in session. Review the selection yourself before retrying.',
     extractorUpdateHelp:
-      'If the link works in the browser, update yt-dlp from Settings. Try the latest Stable release first; Nightly can contain newer website fixes. After updating, return to the failed download and retry.',
+      'If the link works in the browser, update yt-dlp from Settings. Nightly can contain website fixes not yet in Stable. After updating, return to the failed download and retry.',
     cookieLockHelp:
       'For a cookie database copy or permission error, fully close the selected browser, including background processes, and retry with the same cookie source.',
     cookieDecryptHelp:
@@ -846,7 +846,7 @@
     toolStable: 'Vakaa (Stable)',
     toolNightly: 'Kehitysversio (Nightly)',
     toolChannelHint:
-      'Aloita vakaasta versiosta. Nightly sisältää uudempia sivustokorjauksia ja voi olla vähemmän testattu. Valitse kanava ja sitten Asenna tai Päivitä. Voit myös palata vakaaseen versioon.',
+      'Nightly sisältää uusimmat sivustokorjaukset ja voi olla vähemmän testattu. Stable päivittyy harvemmin. Tallennettu valinta ohjaa myös automaattista huoltoa. Asenna tai Päivitä vaihtaa asennetun version heti.',
     toolOldRelease:
       'Tämä yt-dlp-julkaisu on {days} päivää vanha. Sivustojen muutokset voivat vaatia uudemman version. Päivitä alla, jos tuettu linkki ei toimi.',
     remedy_ACCESS:
@@ -865,7 +865,7 @@
     accessCookiesHelp:
       'Jos video toistuu selaimessa mutta vaatii kirjautumisen, valitse kyseinen selain alta tai kirjautuneesta istunnosta viety Netscape-evästetiedosto. Tarkista valinta itse ennen uutta yritystä.',
     extractorUpdateHelp:
-      'Jos linkki toimii selaimessa, päivitä yt-dlp asetuksista. Kokeile ensin uusinta vakaata versiota; Nightly voi sisältää uudempia sivustokorjauksia. Palaa päivityksen jälkeen epäonnistuneeseen lataukseen ja yritä uudelleen.',
+      'Jos linkki toimii selaimessa, päivitä yt-dlp asetuksista. Nightly voi sisältää sivustokorjauksia, joita ei vielä ole vakaassa versiossa. Palaa päivityksen jälkeen epäonnistuneeseen lataukseen ja yritä uudelleen.',
     cookieLockHelp:
       'Jos evästetietokannan kopiointi tai käyttöoikeus epäonnistui, sulje valittu selain kokonaan taustaprosesseineen ja yritä samalla evästelähteellä uudelleen.',
     cookieDecryptHelp:
@@ -878,6 +878,110 @@
       'Käytä selainprofiilia, jossa olet kirjautunut ja video toistuu. Jos evästeitä ei voi lukea, valitse tästä istunnosta viety Netscape-evästetiedosto.',
     cookieNoneHelp:
       'Tilin evästeitä ei lähetetä. Jos sivusto vaatii kirjautumisen, tarkista linkki ensin kirjautuneena selaimessa ja valitse sitten kyseinen selain tai viety Netscape-evästetiedosto.',
+  });
+  Object.assign(messages.en, {
+    nextSteps: 'What to try next',
+    browserMode: 'Browser compatibility',
+    browserAuto: 'Automatic',
+    browserOff: 'Off (standard connection only)',
+    browserCompatible: 'Use browser-compatible connection',
+    browserModeHint:
+      'Helps websites that reject ordinary downloads. It does not sign you in or complete interactive browser checks. Automatic may try compatible mode once.',
+    remedy_BROWSER_CHALLENGE:
+      'The website requested a browser check. This is different from requiring a login. Check the source in your browser, then review browser compatibility before retrying.',
+    remedy_BROWSER_SUPPORT:
+      'The installed download tool cannot provide the requested browser-compatible connection. Check or update the managed yt-dlp installation, then retry.',
+    fixBrowser: 'Review browser compatibility',
+    browserChallengeHelp:
+      'Open the source in your browser to see whether the website requires an interactive check. Completing it there does not guarantee a downloader can pass. Do not add account cookies unless the website separately requires a login.',
+    browserSupportHelp:
+      'Open Settings and check the download tools. Installing or updating the managed yt-dlp provides supported browser compatibility. You can also choose Off to try a standard connection explicitly.',
+    openSource: 'Open source in browser',
+    browserRecoveryRetry: 'Browser compatibility was tried automatically',
+    browserRecoveryReused: 'Remembered browser compatibility is in use',
+    'waiting-site': 'Website requested a pause; other websites can continue',
+    toolMaintenance: 'Download tool maintenance',
+    autoToolUpdates: 'Keep managed download tools up to date automatically',
+    toolMaintenanceHint:
+      'Checks at most once every 24 hours when enabled. A recent check is not repeated by this button. Updates wait until downloads and previews are idle. Use the tool card Update button for an immediate manual update. Tools installed outside VideoNinja are not changed.',
+    checkToolMaintenance: 'Check scheduled maintenance',
+    maintenance_idle: 'No maintenance check has run yet.',
+    maintenance_checking: 'Checking download tool releases…',
+    maintenance_updating: 'Updating managed download tools…',
+    maintenance_deferred: 'Updates are waiting for downloads and previews to become idle.',
+    maintenance_current: 'The checked managed tools are up to date.',
+    maintenance_updated: 'Managed download tools were updated.',
+    maintenance_error: 'Tool maintenance could not finish. Review the details or try again.',
+    maintenanceCheckedAt: 'Last checked: {date}',
+    maintenanceAvailable: 'available: {version}',
+    maintenanceTool_current: 'Up to date',
+    'maintenanceTool_update-available': 'Update available',
+    maintenanceTool_updating: 'Updating',
+    maintenanceTool_updated: 'Updated',
+    maintenanceTool_deferred: 'Waiting until downloads and previews are idle',
+    maintenanceTool_unmanaged: 'Managed outside VideoNinja; update it separately',
+    'maintenanceTool_needs-review': 'Review this tool in Settings',
+    maintenanceTool_error: 'Could not check this tool',
+    siteCompatibility: 'Remembered website compatibility',
+    siteCompatibilityHint:
+      'Automatic mode remembers successful browser compatibility for a limited time. Clearing it makes the next automatic download try the standard connection again. Sign-in cookies are not changed.',
+    refreshCompatibility: 'Show remembered website count',
+    clearCompatibility: 'Clear remembered websites',
+    compatibilityNotChecked: 'Open this section or refresh to check remembered websites.',
+    compatibilityCount: 'Remembered websites: {count}',
+    compatibilityCleared: 'Remembered website compatibility was cleared.',
+  });
+  Object.assign(messages.fi, {
+    nextSteps: 'Seuraavat toimet',
+    browserMode: 'Selainyhteensopivuus',
+    browserAuto: 'Automaattinen',
+    browserOff: 'Pois (vain tavallinen yhteys)',
+    browserCompatible: 'Käytä selaimen kaltaista yhteyttä',
+    browserModeHint:
+      'Auttaa sivustoilla, jotka torjuvat tavalliset lataukset. Valinta ei kirjaa sinua sisään eikä suorita vuorovaikutteisia selaintarkistuksia. Automaattinen tila voi kokeilla yhteensopivaa yhteyttä kerran.',
+    remedy_BROWSER_CHALLENGE:
+      'Sivusto pyysi selaintarkistuksen. Se on eri asia kuin kirjautumisvaatimus. Tarkista lähde selaimessa ja selainyhteensopivuuden valinta ennen uutta yritystä.',
+    remedy_BROWSER_SUPPORT:
+      'Asennettu lataustyökalu ei tue pyydettyä selaimen kaltaista yhteyttä. Tarkista tai päivitä VideoNinjan hallitsema yt-dlp ja yritä uudelleen.',
+    fixBrowser: 'Tarkista selainyhteensopivuus',
+    browserChallengeHelp:
+      'Avaa lähde selaimessa nähdäksesi, vaatiiko sivusto vuorovaikutteisen tarkistuksen. Sen läpäisy selaimessa ei takaa lataajan pääsyä. Älä lisää tilin evästeitä, ellei sivusto erikseen vaadi kirjautumista.',
+    browserSupportHelp:
+      'Avaa asetukset ja tarkista lataustyökalut. VideoNinjan hallitseman yt-dlp:n asennus tai päivitys tuo tuetun selainyhteensopivuuden. Voit myös valita Pois kokeillaksesi tavallista yhteyttä.',
+    openSource: 'Avaa lähde selaimessa',
+    browserRecoveryRetry: 'Selainyhteensopivuutta kokeiltiin automaattisesti',
+    browserRecoveryReused: 'Muistettu selainyhteensopivuus on käytössä',
+    'waiting-site': 'Sivusto pyysi tauon; muut sivustot voivat jatkaa',
+    toolMaintenance: 'Lataustyökalujen huolto',
+    autoToolUpdates: 'Pidä VideoNinjan hallitsemat lataustyökalut ajan tasalla automaattisesti',
+    toolMaintenanceHint:
+      'Tarkistaa enintään kerran 24 tunnissa, kun valinta on käytössä. Painike ei toista äskettäistä tarkistusta. Päivitykset odottavat latausten ja esikatselujen vapautumista. Työkalun Päivitä-painike tekee manuaalisen päivityksen heti. Muualla asennettuja työkaluja ei muuteta.',
+    checkToolMaintenance: 'Tarkista ajastettu huolto',
+    maintenance_idle: 'Huoltotarkistusta ei ole vielä tehty.',
+    maintenance_checking: 'Tarkistetaan lataustyökalujen julkaisuja…',
+    maintenance_updating: 'Päivitetään hallittuja lataustyökaluja…',
+    maintenance_deferred: 'Päivitykset odottavat latausten ja esikatselujen vapautumista.',
+    maintenance_current: 'Tarkistetut hallitut työkalut ovat ajan tasalla.',
+    maintenance_updated: 'Hallitut lataustyökalut päivitettiin.',
+    maintenance_error: 'Työkaluhuolto ei valmistunut. Tarkista virheen tiedot tai yritä uudelleen.',
+    maintenanceCheckedAt: 'Tarkistettu viimeksi: {date}',
+    maintenanceAvailable: 'saatavilla: {version}',
+    maintenanceTool_current: 'Ajan tasalla',
+    'maintenanceTool_update-available': 'Päivitys saatavilla',
+    maintenanceTool_updating: 'Päivitetään',
+    maintenanceTool_updated: 'Päivitetty',
+    maintenanceTool_deferred: 'Odottaa latausten ja esikatselujen vapautumista',
+    maintenanceTool_unmanaged: 'Hallitaan VideoNinjan ulkopuolella; päivitä erikseen',
+    'maintenanceTool_needs-review': 'Tarkista tämä työkalu asetuksista',
+    maintenanceTool_error: 'Työkalua ei voitu tarkistaa',
+    siteCompatibility: 'Muistettu sivustoyhteensopivuus',
+    siteCompatibilityHint:
+      'Automaattinen tila muistaa toimivan selainyhteensopivuuden rajatun ajan. Tyhjennys palauttaa seuraavan automaattisen latauksen aloittamaan tavallisesta yhteydestä. Kirjautumisevästeet eivät muutu.',
+    refreshCompatibility: 'Näytä muistettujen sivustojen määrä',
+    clearCompatibility: 'Tyhjennä muistetut sivustot',
+    compatibilityNotChecked: 'Avaa tämä osio tai päivitä muistettujen sivustojen määrä.',
+    compatibilityCount: 'Muistettuja sivustoja: {count}',
+    compatibilityCleared: 'Muistettu sivustoyhteensopivuus tyhjennettiin.',
   });
   let language = 'en';
   function t(key, values = {}) {

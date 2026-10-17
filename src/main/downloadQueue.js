@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { classifyDownloadError, downloadError } = require('./downloadErrors');
 const { normalizeOptions, validateUrl } = require('./downloadOptions');
+const { siteOrigin, sanitizeSiteLimits, MAX_SITES, LIMITED_FOR } = require('./siteLimits');
 const {
   SCHEMA_VERSION,
   MAX_QUEUE_ITEMS,
@@ -101,6 +102,7 @@ class DownloadQueue extends EventEmitter {
       throw new Error('Choose between 1 and 5 concurrent downloads.');
     this._active = new Map();
     this._duplicateBlockers = new Map();
+    this._siteLimits = new Map();
     this._scheduling = false;
     this._shuttingDown = false;
     this._shutdownPromise = null;
@@ -275,6 +277,14 @@ class DownloadQueue extends EventEmitter {
       .filter((job) => job.status === 'pending' && job.retryAt)
       .map((job) => Date.parse(job.retryAt))
       .filter((time) => time > now);
+    for (const limit of this._siteLimits.values()) {
+      if (
+        this.queue.some((job) => job.status === 'pending' && siteOrigin(job.url) === limit.origin)
+      ) {
+        const expiry = Date.parse(limit.limitedUntil);
+        if (expiry > now) deadlines.push(expiry);
+      }
+    }
     // Check local wall-clock boundaries every minute, including DST and clock changes.
     if (this.settings.scheduleEnabled && this.queue.length)
       deadlines.push(now + (60000 - (now % 60000)));
@@ -294,6 +304,78 @@ class DownloadQueue extends EventEmitter {
       Math.max(1, Math.min(2147483647, Math.min(...deadlines) - now)),
     );
     this._wakeTimer?.unref?.();
+  }
+
+  _recordSiteLimit(download) {
+    const origin = siteOrigin(download.url);
+    if (!origin) return;
+    const previous = this._siteLimits.get(origin);
+    const strikes = Math.min(
+      6,
+      (previous && Date.parse(previous.limitedUntil) > this._clock() ? previous.strikes : 0) + 1,
+    );
+    const seconds = Math.min(
+      900,
+      Math.max(30, this.settings.retryDelaySeconds) * 2 ** (strikes - 1),
+    );
+    const retryAt = Math.max(this._clock() + seconds * 1000, Date.parse(previous?.retryAt) || 0);
+    this._siteLimits.delete(origin);
+    this._siteLimits.set(origin, {
+      origin,
+      strikes,
+      retryAt: new Date(retryAt).toISOString(),
+      limitedUntil: new Date(retryAt + LIMITED_FOR).toISOString(),
+      private: Boolean(download.private),
+      // Private activity may extend the in-memory delay, but cannot replace or
+      // disclose changes to the previously persisted public cooldown.
+      ...(download.private && previous
+        ? { publicLimit: previous.private ? previous.publicLimit : previous }
+        : {}),
+    });
+    while (this._siteLimits.size > MAX_SITES)
+      this._siteLimits.delete(this._siteLimits.keys().next().value);
+  }
+
+  _siteAvailable(download) {
+    const origin = siteOrigin(download.url),
+      limit = this._siteLimits.get(origin);
+    if (!limit) return true;
+    if (Date.parse(limit.limitedUntil) <= this._clock()) {
+      this._siteLimits.delete(origin);
+      return true;
+    }
+    const waiting = Date.parse(limit.retryAt) > this._clock();
+    const occupied = [...this._active.values()].some(
+      (active) => siteOrigin(active.download.url) === origin,
+    );
+    if (!waiting && !occupied) return true;
+    const previousPhase = download.phase,
+      previousRetry = download.retryAt;
+    download.phase = 'waiting-site';
+    if (waiting && (!download.retryAt || Date.parse(download.retryAt) < Date.parse(limit.retryAt)))
+      download.retryAt = limit.retryAt;
+    if (download.phase !== previousPhase || download.retryAt !== previousRetry)
+      this._siteStateChanged = true;
+    return false;
+  }
+
+  _recovery(active, value) {
+    if (
+      active.intent ||
+      active.controller.signal.aborted ||
+      !['browser-retry', 'browser-reused'].includes(value?.type)
+    )
+      return;
+    active.download.recovery = { type: value.type };
+    this._notify();
+  }
+
+  _controls(active) {
+    return {
+      signal: active.controller.signal,
+      private: Boolean(active.download.private),
+      onRecovery: (value) => this._recovery(active, value),
+    };
   }
 
   _watch(active) {
@@ -363,6 +445,7 @@ class DownloadQueue extends EventEmitter {
         const download = this.queue.find(
           (item) =>
             item.status === 'pending' &&
+            this._siteAvailable(item) &&
             (!item.retryAt || Date.parse(item.retryAt) <= this._clock()) &&
             (!this._duplicateBlockers.has(item.id) ||
               !this._active.has(this._duplicateBlockers.get(item.id))) &&
@@ -392,6 +475,7 @@ class DownloadQueue extends EventEmitter {
         download.errorCode = null;
         download.errorAction = null;
         download.errorRetryable = false;
+        delete download.recovery;
         download.retryAt = null;
         this._duplicateBlockers.delete(download.id);
         this._watch(active);
@@ -401,6 +485,10 @@ class DownloadQueue extends EventEmitter {
         this._notify();
       }
     } finally {
+      if (this._siteStateChanged) {
+        this._siteStateChanged = false;
+        this._notify();
+      }
       this._scheduling = false;
       this._armWake();
     }
@@ -419,7 +507,7 @@ class DownloadQueue extends EventEmitter {
     let metadata;
     if (this._prepareDownload) {
       metadata = await this._prepareDownload(download.url, clone(download.options), {
-        signal: controller.signal,
+        ...this._controls(active),
       });
       if (controller.signal.aborted) return false;
       if (metadata && typeof metadata === 'object') {
@@ -552,10 +640,16 @@ class DownloadQueue extends EventEmitter {
     download.errorCode = classified.code;
     download.errorAction = classified.action;
     download.errorRetryable = classified.retryable;
+    if (classified.code === 'rate-limit') this._recordSiteLimit(download);
     if (classified.retryable && (download.retryCount || 0) < this.settings.retryAttempts) {
       download.retryCount = (download.retryCount || 0) + 1;
       const delay = Math.min(900, this.settings.retryDelaySeconds * 2 ** (download.retryCount - 1));
-      this._wait(active, 'waiting-retry', delay * 1000);
+      this._wait(
+        active,
+        classified.code === 'rate-limit' ? 'waiting-site' : 'waiting-retry',
+        delay * 1000,
+      );
+      if (classified.code === 'rate-limit') this._siteAvailable(download);
       this.emit('download-retrying', clone(download));
     } else {
       this._finish(download, 'failed', download.error);
@@ -577,7 +671,7 @@ class DownloadQueue extends EventEmitter {
         download.outputPath,
         this._optionsForRun(active),
         (progress) => this._progress(active, progress),
-        { signal: controller.signal },
+        this._controls(active),
       );
       // User intent wins even when process completion and abort race each other.
       if (active.intent) return;
@@ -603,7 +697,13 @@ class DownloadQueue extends EventEmitter {
         }
         this._finish(download, 'completed');
       } else {
-        this._failure(active, result?.error || 'The download did not produce a usable file.');
+        this._failure(
+          active,
+          downloadError(
+            result?.errorCode,
+            result?.error || 'The download did not produce a usable file.',
+          ),
+        );
       }
     } catch (error) {
       if (!active.intent) this._failure(active, active.failure || error);
@@ -943,6 +1043,9 @@ class DownloadQueue extends EventEmitter {
     this.queue = restored.queue;
     this.history = restored.history;
     this.archive = restored.archive || [];
+    this._siteLimits = new Map(
+      sanitizeSiteLimits(restored.siteLimits, this._clock()).map((item) => [item.origin, item]),
+    );
     this._duplicateBlockers.clear();
     this._pruneHistory();
     this._notify();
@@ -951,11 +1054,18 @@ class DownloadQueue extends EventEmitter {
   }
 
   getStateForSave() {
+    const siteLimits = sanitizeSiteLimits(
+      [...this._siteLimits.values()]
+        .map((item) => (item.private ? item.publicLimit : item))
+        .filter(Boolean),
+      this._clock(),
+    );
     return clone({
       schemaVersion: SCHEMA_VERSION,
       queue: this.queue.filter((job) => !job.private),
       history: this.history.filter((job) => !job.private),
       archive: boundedArchive(this.archive),
+      ...(siteLimits.length ? { siteLimits } : {}),
     });
   }
 

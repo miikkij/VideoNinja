@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { normalizeOptions, validateUrl } = require('./downloadOptions');
 const { classifyDownloadError } = require('./downloadErrors');
+const { sanitizeSiteLimits } = require('./siteLimits');
 const { MAX_CONFIG_BYTES } = require('./storageLimits');
 
 const SCHEMA_VERSION = 1;
@@ -28,6 +29,8 @@ const FEATURE_DEFAULTS = Object.freeze({
   theme: 'auto',
   notifications: false,
   checkUpdatesOnStartup: true,
+  autoToolUpdates: false,
+  ytdlpChannel: 'nightly',
 });
 const SETTING_RANGES = Object.freeze({
   retryAttempts: [0, 5],
@@ -106,6 +109,7 @@ function validateFeatureSettings(input) {
     'skipDuplicates',
     'notifications',
     'checkUpdatesOnStartup',
+    'autoToolUpdates',
   ])
     if (input[key] !== undefined && typeof input[key] !== 'boolean')
       throw new Error(`Invalid ${key}.`);
@@ -113,6 +117,8 @@ function validateFeatureSettings(input) {
     if (input[key] !== undefined && !clockTime(input[key])) throw new Error(`Invalid ${key}.`);
   if (input.theme !== undefined && !['auto', 'light', 'dark'].includes(input.theme))
     throw new Error('Invalid theme.');
+  if (input.ytdlpChannel !== undefined && !['stable', 'nightly'].includes(input.ytdlpChannel))
+    throw new Error('Invalid yt-dlp channel.');
   if (input.scheduleEnabled && input.scheduleStart === input.scheduleEnd)
     throw new Error('Choose different schedule start and end times.');
 }
@@ -301,6 +307,8 @@ function sanitizeQueueState(
     return result;
   }
   const ids = new Set();
+  const siteLimits = sanitizeSiteLimits(raw.siteLimits, Date.parse(now()));
+  if (siteLimits.length) result.siteLimits = siteLimits;
   let dropped = 0;
   let migratedIds = 0;
   let reviewedOptions = 0;
@@ -368,11 +376,17 @@ function sanitizeQueueState(
     if (restored.private) throw new Error('Private jobs are not restored.');
     if (
       status === 'pending' &&
-      ['waiting-retry', 'waiting-disk', 'waiting-schedule', 'waiting-duplicate'].includes(
-        entry.phase,
-      )
+      [
+        'waiting-retry',
+        'waiting-disk',
+        'waiting-schedule',
+        'waiting-duplicate',
+        'waiting-site',
+      ].includes(entry.phase)
     )
       restored.phase = entry.phase;
+    if (['browser-retry', 'browser-reused'].includes(entry.recovery?.type))
+      restored.recovery = { type: entry.recovery.type };
     if (optionsNeedReview) {
       restored.optionsNeedReview = true;
       restored.errorCode = 'options-review';

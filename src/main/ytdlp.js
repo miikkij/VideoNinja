@@ -9,6 +9,8 @@ const {
   QUALITY_PRESETS,
 } = require('./downloadOptions');
 const { runProcess, abortError } = require('./processRunner');
+const { downloadError, isBrowserChallenge, classifyDownloadError } = require('./downloadErrors');
+const { createSiteCompatibility } = require('./siteCompatibility');
 
 const PROTOCOL = Object.freeze({
   progress: 'VN_PROGRESS:',
@@ -89,6 +91,7 @@ function buildCommonArgs(options, toolInfo, ffmpegInfo, { url, playlist = false 
   if (options.referer) args.push('--referer', options.referer);
   if (options.forceIpv4) args.push('--force-ipv4');
   if (options.extractorArgs) args.push('--extractor-args', options.extractorArgs);
+  if (options.browserMode === 'compatible') args.push('--extractor-args', 'generic:impersonate');
   args.push(...(options.extraArgs || []));
   // The explicit UI setting takes precedence over the legacy advanced option.
   if (options.rateLimitKbps > 0) args.push('--limit-rate', `${options.rateLimitKbps}K`);
@@ -260,6 +263,85 @@ function createDownloader(deps = {}) {
   const toolService = deps.tools || tools;
   const writers = new Map();
   const platform = deps.platform || process.platform;
+  const siteCompatibility = deps.siteCompatibility || createSiteCompatibility();
+  // The queue shares one signal across preflight, format validation and download.
+  // Weak ownership releases completed/cancelled job contexts without persisting URLs.
+  const browserContexts = new WeakMap();
+
+  function browserContext(url, options, tool, control) {
+    const mode = options.browserMode || 'auto';
+    const key = JSON.stringify([url, mode, control.private === true, tool.version]);
+    let context = browserContexts.get(control.signal);
+    if (!context || context.key !== key) {
+      const reused =
+        mode === 'auto' &&
+        tool.impersonation?.available === true &&
+        siteCompatibility.isCompatible(url, tool.version, control);
+      context = { key, mode, compatible: mode === 'compatible' || reused, reused, notified: false };
+      browserContexts.set(control.signal, context);
+    }
+    return context;
+  }
+
+  function recovery(control, type) {
+    try {
+      control.onRecovery?.({ type });
+    } catch {
+      /* A view callback must not interrupt process ownership or recovery. */
+    }
+  }
+
+  async function executeYtdlp(tool, args, handlers, context, control, diagnostic) {
+    const compatibleArgs = () => {
+      const included = args.some(
+        (arg, index) => arg === '--extractor-args' && args[index + 1] === 'generic:impersonate',
+      );
+      if (!context.compatible || included) return args;
+      const separator = args.lastIndexOf('--');
+      return [
+        ...args.slice(0, separator),
+        '--extractor-args',
+        'generic:impersonate',
+        ...args.slice(separator),
+      ];
+    };
+    const requireSupport = () => {
+      if (tool.impersonation?.available !== true)
+        throw downloadError(
+          'browser-support',
+          'Browser impersonation support is unavailable. Update yt-dlp and check the tools again.',
+        );
+    };
+    if (control.signal.aborted) throw abortError();
+    if (context.compatible) requireSupport();
+    if (context.reused && !context.notified) {
+      context.notified = true;
+      recovery(control, 'browser-reused');
+    }
+    if (control.signal.aborted) throw abortError();
+    let result = await execute(tool.path, compatibleArgs(), handlers);
+    if (control.signal.aborted) throw abortError();
+    if (result.code === 0 || !isBrowserChallenge(diagnostic.read())) return result;
+    if (context.mode === 'off' || context.compatible)
+      throw downloadError('browser-challenge', diagnostic.read());
+    requireSupport();
+    // Set the shared mode before invoking the retry, including failures/aborts.
+    // Later phases of this same job cannot spend a second fallback attempt.
+    context.compatible = true;
+    recovery(control, 'browser-retry');
+    diagnostic.reset();
+    if (control.signal.aborted) throw abortError();
+    result = await execute(tool.path, compatibleArgs(), handlers);
+    if (control.signal.aborted) throw abortError();
+    if (result.code !== 0 && isBrowserChallenge(diagnostic.read()))
+      throw downloadError('browser-challenge', diagnostic.read());
+    return result;
+  }
+
+  function rememberCompatible(url, tool, context, control) {
+    if (context.compatible && !control.signal.aborted)
+      siteCompatibility.remember(url, tool.version, control);
+  }
 
   function acquireWriter(key, signal) {
     if (signal?.aborted) return Promise.reject(abortError());
@@ -316,17 +398,13 @@ function createDownloader(deps = {}) {
    * @param {string} outputPath
    * @param {import('./downloadOptions').DownloadOptions} input
    * @param {Function|null} progressCallback Receives progress, metadata and completion.
-   * @param {{signal?: AbortSignal}} control
+   * @param {{signal?: AbortSignal, private?: boolean, onRecovery?: Function}} control
    * @returns {Promise<{success: boolean, filepath: string|null, error: string|null, metadata?: object}>}
    * @throws {Error} Invalid input or AbortError after subprocess cleanup.
    */
-  async function downloadVideo(
-    url,
-    outputPath,
-    input = {},
-    progressCallback = null,
-    { signal } = {},
-  ) {
+  async function downloadVideo(url, outputPath, input = {}, progressCallback = null, control = {}) {
+    const signal = control.signal || new AbortController().signal;
+    control = { ...control, signal };
     url = validateUrl(url);
     const options = normalizeOptions(input);
     const secrets = [url, options.cookieFile, options.referer, options.userAgent, outputPath];
@@ -341,8 +419,9 @@ function createDownloader(deps = {}) {
       const writerKey = JSON.stringify([platform === 'win32' ? root.toLowerCase() : root, url]);
       releaseWriter = await acquireWriter(writerKey, signal);
       const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
+      const context = browserContext(url, options, ytdlpInfo, control);
       if (options.formatId) {
-        const preview = await fetchMetadata(url, options, { signal });
+        const preview = await fetchMetadata(url, options, control);
         const selected = options.formatId
           .split('+')
           .map((id) => preview.formats.find((format) => format.formatId === id));
@@ -401,16 +480,31 @@ function createDownloader(deps = {}) {
           /* Ignore malformed protocol lines without rendering or evaluating them. */
         }
       };
-      const result = await execute(ytdlpInfo.path, args, {
-        cwd: root,
-        signal,
-        onStdoutLine: onLine,
-        onStderrLine: (line) => {
-          onLine(line);
-          if (!Object.values(PROTOCOL).some((prefix) => line.startsWith(prefix)))
-            errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+      const result = await executeYtdlp(
+        ytdlpInfo,
+        args,
+        {
+          cwd: root,
+          signal,
+          onStdoutLine: onLine,
+          onStderrLine: (line) => {
+            onLine(line);
+            if (!Object.values(PROTOCOL).some((prefix) => line.startsWith(prefix)))
+              errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+          },
         },
-      });
+        context,
+        control,
+        {
+          read: () => errorOutput,
+          reset: () => {
+            filename = null;
+            metadata = null;
+            errorOutput = '';
+            lastPercent = 0;
+          },
+        },
+      );
       if (signal?.aborted) throw abortError();
       if (result.code !== 0)
         throw new Error(errorOutput || `yt-dlp exited with code ${result.code}.`);
@@ -426,11 +520,17 @@ function createDownloader(deps = {}) {
         throw new Error('The final media file is empty or its size could not be verified.');
       const integrity = await verifyIntegrity(finalPath, finalStat.size, options, signal);
       if (signal?.aborted) throw abortError();
+      rememberCompatible(url, ytdlpInfo, context, control);
       progressCallback?.({ type: 'complete', percent: 100, status: 'completed' });
       return { success: true, filepath: finalPath, error: null, metadata, integrity };
     } catch (error) {
       if (error.name === 'AbortError' || signal?.aborted) throw abortError();
-      return { success: false, filepath: null, error: redactError(error.message, secrets) };
+      return {
+        success: false,
+        filepath: null,
+        error: redactError(error.message, secrets),
+        errorCode: classifyDownloadError(error).code,
+      };
     } finally {
       releaseWriter?.();
     }
@@ -510,12 +610,15 @@ function createDownloader(deps = {}) {
     };
   }
 
-  async function fetchMetadata(url, input = {}, { signal } = {}) {
+  async function fetchMetadata(url, input = {}, control = {}) {
+    const signal = control.signal || new AbortController().signal;
+    control = { ...control, signal };
     url = validateUrl(url);
     const options = normalizeOptions(input);
     const secrets = [url, options.cookieFile, options.referer, options.userAgent];
     try {
       const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
+      const context = browserContext(url, options, ytdlpInfo, control);
       const args = [
         ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo, { url }),
         '--skip-download',
@@ -527,42 +630,54 @@ function createDownloader(deps = {}) {
       ];
       let metadata = null,
         errorOutput = '';
-      const result = await execute(ytdlpInfo.path, args, {
-        signal,
-        timeoutMs: 60000,
-        maxLine: PLAYLIST_OUTPUT_LIMIT,
-        maxOutputBytes: PLAYLIST_OUTPUT_LIMIT,
-        cwd: path.dirname(ytdlpInfo.path),
-        onStdoutLine: (line) => {
-          if (line.startsWith(PROTOCOL.metadata)) {
-            try {
-              metadata = safeMetadata(JSON.parse(line.slice(PROTOCOL.metadata.length)));
-            } catch {
-              /* Invalid metadata. */
+      const result = await executeYtdlp(
+        ytdlpInfo,
+        args,
+        {
+          signal,
+          timeoutMs: 60000,
+          maxLine: PLAYLIST_OUTPUT_LIMIT,
+          maxOutputBytes: PLAYLIST_OUTPUT_LIMIT,
+          cwd: path.dirname(ytdlpInfo.path),
+          onStdoutLine: (line) => {
+            if (line.startsWith(PROTOCOL.metadata)) {
+              try {
+                metadata = safeMetadata(JSON.parse(line.slice(PROTOCOL.metadata.length)));
+              } catch {
+                /* Invalid metadata. */
+              }
             }
-          }
+          },
+          onStderrLine: (line) => {
+            errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+          },
         },
-        onStderrLine: (line) => {
-          errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+        context,
+        control,
+        {
+          read: () => errorOutput,
+          reset: () => {
+            metadata = null;
+            errorOutput = '';
+          },
         },
-      });
+      );
       if (signal?.aborted) throw abortError();
       if (result.code !== 0 || !metadata)
         throw new Error(errorOutput || 'Unable to read video information.');
+      rememberCompatible(url, ytdlpInfo, context, control);
       return metadata;
     } catch (error) {
       if (error.name === 'AbortError' || signal?.aborted) throw abortError();
       // Raw subprocess errors can contain cookie paths and signed URLs.
-      // eslint-disable-next-line preserve-caught-error -- Intentionally discard sensitive error causes.
-      throw new Error(redactError(error.message, secrets));
+      throw downloadError(error.downloadCode, redactError(error.message, secrets));
     }
   }
 
-  async function fetchPlaylist(
-    url,
-    input = {},
-    { signal, start = 1, pageSize = PLAYLIST_LIMIT } = {},
-  ) {
+  async function fetchPlaylist(url, input = {}, control = {}) {
+    const { start = 1, pageSize = PLAYLIST_LIMIT } = control;
+    const signal = control.signal || new AbortController().signal;
+    control = { ...control, signal };
     url = validateUrl(url);
     const options = normalizeOptions(input);
     if (
@@ -577,6 +692,7 @@ function createDownloader(deps = {}) {
     const secrets = [url, options.cookieFile, options.referer, options.userAgent];
     try {
       const { ytdlpInfo, ffmpegInfo } = await getTools(signal);
+      const context = browserContext(url, options, ytdlpInfo, control);
       const args = [
         ...buildCommonArgs(options, ytdlpInfo, ffmpegInfo, { url, playlist: true }),
         '--flat-playlist',
@@ -594,40 +710,55 @@ function createDownloader(deps = {}) {
       let playlist = null,
         parseError = null,
         errorOutput = '';
-      const result = await execute(ytdlpInfo.path, args, {
-        signal,
-        timeoutMs: 60000,
-        maxLine: PLAYLIST_OUTPUT_LIMIT,
-        maxOutputBytes: PLAYLIST_OUTPUT_LIMIT,
-        cwd: path.dirname(ytdlpInfo.path),
-        onStdoutLine: (line) => {
-          if (!line.startsWith(PROTOCOL.playlist) || parseError) return;
-          try {
-            if (line.length > PLAYLIST_OUTPUT_LIMIT)
-              throw new Error('The playlist exceeded the preview output limit.');
-            if (playlist) throw new Error('Nested playlist previews are not supported.');
-            playlist = safePlaylist(
-              JSON.parse(line.slice(PROTOCOL.playlist.length)),
-              start,
-              pageSize,
-            );
-          } catch {
-            parseError = new Error('Unable to read the playlist within the preview limits.');
-          }
+      const result = await executeYtdlp(
+        ytdlpInfo,
+        args,
+        {
+          signal,
+          timeoutMs: 60000,
+          maxLine: PLAYLIST_OUTPUT_LIMIT,
+          maxOutputBytes: PLAYLIST_OUTPUT_LIMIT,
+          cwd: path.dirname(ytdlpInfo.path),
+          onStdoutLine: (line) => {
+            if (!line.startsWith(PROTOCOL.playlist) || parseError) return;
+            try {
+              if (line.length > PLAYLIST_OUTPUT_LIMIT)
+                throw new Error('The playlist exceeded the preview output limit.');
+              if (playlist) throw new Error('Nested playlist previews are not supported.');
+              playlist = safePlaylist(
+                JSON.parse(line.slice(PROTOCOL.playlist.length)),
+                start,
+                pageSize,
+              );
+            } catch {
+              parseError = new Error('Unable to read the playlist within the preview limits.');
+            }
+          },
+          onStderrLine: (line) => {
+            errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+          },
         },
-        onStderrLine: (line) => {
-          errorOutput = redactError(`${errorOutput}\n${line}`, secrets);
+        context,
+        control,
+        {
+          read: () => errorOutput,
+          reset: () => {
+            playlist = null;
+            parseError = null;
+            errorOutput = '';
+          },
         },
-      });
+      );
       if (signal?.aborted) throw abortError();
       if (result.code !== 0) throw new Error(errorOutput || 'Unable to read the playlist.');
       if (parseError) throw parseError;
       if (!playlist) throw new Error('This URL did not provide a playlist.');
+      rememberCompatible(url, ytdlpInfo, context, control);
       return playlist;
     } catch (error) {
       if (error.name === 'AbortError' || signal?.aborted) throw abortError();
-      // eslint-disable-next-line preserve-caught-error -- Discard raw subprocess details and credentials.
-      throw new Error(redactError(error.message, secrets));
+      // Discard raw subprocess details and credentials.
+      throw downloadError(error.downloadCode, redactError(error.message, secrets));
     }
   }
 

@@ -290,14 +290,15 @@ describe('concurrent queue scheduling and atomic batches', () => {
 
 function controlledQueue(options = {}) {
   const runs = [];
-  const downloadVideo = vi.fn((videoUrl, outputPath, downloadOptions, progress, { signal }) => {
+  const downloadVideo = vi.fn((videoUrl, outputPath, downloadOptions, progress, controls) => {
     return new Promise((resolve, reject) =>
       runs.push({
         url: videoUrl,
         outputPath,
         options: downloadOptions,
         progress,
-        signal,
+        signal: controls.signal,
+        controls,
         resolve,
         reject,
       }),
@@ -344,6 +345,148 @@ const prepared = (id = 'same', size = 100) => ({
   extractor: 'Fixture',
   title: 'Owned test media',
   filesize: size,
+});
+
+describe('site recovery scheduling', () => {
+  it('keeps a prior public cooldown when private activity extends the in-memory delay', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({ ...clock, settings: { retryAttempts: 0 } });
+    queue.addDownload(url('public'), '/tmp');
+    await flush();
+    runs[0].reject(new Error('HTTP Error 429'));
+    await flush();
+    const publicLimits = queue.getStateForSave().siteLimits;
+    queue.configure({ privateMode: true });
+    queue.addDownload(url('private'), '/tmp');
+    await clock.advance(30000);
+    runs[1].reject(new Error('HTTP Error 429'));
+    await flush();
+    expect(queue.getStateForSave().siteLimits).toEqual(publicLimits);
+    expect(queue.getStateForSave().history).toHaveLength(1);
+    await queue.shutdown();
+  });
+  it('preserves the adapter error category even if the displayed diagnostic is redacted', async () => {
+    const { queue, runs } = controlledQueue();
+    const id = queue.addDownload(url('typed-error'), '/tmp');
+    await flush();
+    runs[0].resolve({
+      success: false,
+      errorCode: 'browser-challenge',
+      error: '[URL] rejected access.',
+    });
+    await flush();
+    expect(queue.getDownload(id)).toMatchObject({
+      status: 'failed',
+      errorCode: 'browser-challenge',
+      errorAction: 'check-browser',
+      retryCount: 0,
+    });
+    await queue.shutdown();
+  });
+  it('cools down only the 429 origin, then admits one job there while other origins continue', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({ ...clock, maxConcurrent: 2 });
+    const ids = queue.addBatch(
+      [url('limited'), 'https://other.example/a', url('waiting'), 'https://other.example/b'],
+      '/tmp',
+    );
+    await flush();
+    runs[0].reject(new Error('HTTP Error 429: Too Many Requests'));
+    await flush();
+    expect(runs.map((run) => run.url)).toEqual([
+      url('limited'),
+      'https://other.example/a',
+      'https://other.example/b',
+    ]);
+    expect(queue.getDownload(ids[2])).toMatchObject({ status: 'pending', phase: 'waiting-site' });
+    runs[1].resolve(success);
+    runs[2].resolve(success);
+    await flush();
+    await clock.advance(29999);
+    expect(runs).toHaveLength(3);
+    await clock.advance(1);
+    expect(runs).toHaveLength(4);
+    expect(runs[3].url).toBe(url('limited'));
+    queue.addDownload('https://other.example/c', '/tmp');
+    await flush();
+    expect(runs[4].url).toBe('https://other.example/c');
+    runs[3].resolve(success);
+    await flush();
+    expect(runs[5].url).toBe(url('waiting'));
+    runs[4].resolve(success);
+    runs[5].resolve(success);
+    await flush();
+    await queue.shutdown();
+    expect(clock.timers.size).toBe(0);
+  });
+
+  it('persists cooldown even when the failed job has no retries left and restores it', async () => {
+    const clock = manualClock();
+    const first = controlledQueue({ ...clock, settings: { retryAttempts: 0 } });
+    first.queue.addBatch([url('failed'), url('waiting')], '/tmp');
+    await flush();
+    first.runs[0].reject(new Error('HTTP Error 429'));
+    await flush();
+    const saved = await first.queue.shutdown();
+    expect(saved.siteLimits).toHaveLength(1);
+    expect(JSON.stringify(saved.siteLimits)).not.toContain('/failed');
+    const second = controlledQueue(clock);
+    second.queue.loadState(saved);
+    await flush();
+    expect(second.runs).toHaveLength(0);
+    await clock.advance(30000);
+    expect(second.runs[0].url).toBe(url('waiting'));
+    second.runs[0].resolve(success);
+    await flush();
+    await second.queue.shutdown();
+  });
+
+  it('expires reduced concurrency and does not persist limits caused by private jobs', async () => {
+    const clock = manualClock();
+    const { queue, runs } = controlledQueue({
+      ...clock,
+      settings: { retryAttempts: 0, privateMode: true, stallTimeoutSeconds: 3600 },
+    });
+    queue.addDownload(url('private'), '/tmp');
+    await flush();
+    runs[0].reject(new Error('HTTP Error 429'));
+    await flush();
+    expect(queue.getStateForSave().siteLimits).toBeUndefined();
+    queue.setConcurrency(3);
+    queue.addBatch(['a', 'b', 'c'].map(url), '/tmp');
+    await clock.advance(30000);
+    expect(runs).toHaveLength(2);
+    await clock.advance(15 * 60000);
+    expect(runs).toHaveLength(4);
+    for (const run of runs.slice(1)) run.resolve(success);
+    await flush();
+    await queue.shutdown();
+  });
+
+  it('carries privacy and a single recovery state across metadata and download without leaking callback input', async () => {
+    let preparing;
+    const { queue, runs } = controlledQueue({
+      settings: { privateMode: true },
+      realpath: async (value) => value,
+      prepareDownload: async (_url, _options, controls) => {
+        preparing = controls;
+        controls.onRecovery({ type: 'browser-retry', url: 'do not expose' });
+        return prepared();
+      },
+    });
+    const id = queue.addDownload(url('recovery'), '/tmp');
+    await flush();
+    expect(preparing.private).toBe(true);
+    expect(runs[0].controls.private).toBe(true);
+    expect(preparing.signal).toBe(runs[0].signal);
+    expect(queue.getDownload(id).recovery).toEqual({ type: 'browser-retry' });
+    queue.pauseDownload(id);
+    runs[0].controls.onRecovery({ type: 'browser-reused' });
+    expect(queue.getDownload(id).recovery.type).toBe('browser-retry');
+    runs[0].resolve(success);
+    await flush();
+    await queue.shutdown();
+  });
 });
 
 describe('automatic retries, watchdogs and scheduling windows', () => {

@@ -19,18 +19,29 @@ describe('private profile store', () => {
       store: {
         settings: { language: 'fi' },
         queueState: { queue: [{ url: 'https://private.example/secret' }] },
+        siteCompatibility: [
+          {
+            origin: 'https://remembered.example',
+            version: 'test',
+            expiresAt: '2026-10-24T00:00:00.000Z',
+          },
+        ],
       },
     };
     const store = privacy.createPrivateStore(raw, vault());
     store.set('settings', { language: 'fi', encryptedStorage: true });
     expect(raw.store.settings).toBeUndefined();
     expect(raw.store.queueState).toBeUndefined();
+    expect(raw.store.siteCompatibility).toBeUndefined();
+    expect(JSON.stringify(raw.store)).not.toContain('remembered.example');
     expect(JSON.stringify(raw.store)).not.toContain('private.example');
     const restored = privacy.createPrivateStore(raw, vault());
     expect(restored.get('queueState').queue[0].url).toContain('private.example');
+    expect(restored.get('siteCompatibility')[0].origin).toBe('https://remembered.example');
     restored.set('settings', { encryptedStorage: false });
     expect(raw.store.protectedState).toBeUndefined();
     expect(raw.store.queueState.queue).toHaveLength(1);
+    expect(raw.store.siteCompatibility[0].origin).toBe('https://remembered.example');
   });
   it('rejects Linux plaintext fallback and preserves the original document', () => {
     const raw = { store: { settings: { language: 'en' } } };

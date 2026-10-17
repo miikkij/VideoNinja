@@ -198,6 +198,54 @@
             </div>
           </div>
           <p id="tool-action-status" class="hint" role="status"></p>
+          <details id="tool-maintenance-settings" class="settings-advanced">
+            <summary data-i18n="toolMaintenance">Download tool maintenance</summary>
+            <label class="check-field"
+              ><input id="auto-tool-updates" type="checkbox" /><span data-i18n="autoToolUpdates"
+                >Keep managed download tools up to date automatically</span
+              ></label
+            >
+            <p class="hint" data-i18n="toolMaintenanceHint">
+              Checks at most once every 24 hours when enabled. A recent check is not repeated by
+              this button. Updates wait until downloads and previews are idle. Use the tool card
+              Update button for an immediate manual update. Tools installed outside VideoNinja are
+              not changed.
+            </p>
+            <p id="tool-maintenance-status" role="status"></p>
+            <ul id="tool-maintenance-list"></ul>
+            <details id="tool-maintenance-error" hidden>
+              <summary data-i18n="errorDetails">Error details</summary>
+              <pre id="tool-maintenance-error-text" class="error-detail"></pre>
+            </details>
+            <button id="check-tool-maintenance" type="button" data-i18n="checkToolMaintenance">
+              Check scheduled maintenance
+            </button>
+          </details>
+          <details id="site-compatibility-settings" class="settings-advanced">
+            <summary data-i18n="siteCompatibility">Remembered website compatibility</summary>
+            <p class="hint" data-i18n="siteCompatibilityHint">
+              Automatic mode remembers successful browser compatibility for a limited time. Clearing
+              it makes the next automatic download try the standard connection again. Sign-in
+              cookies are not changed.
+            </p>
+            <p id="site-compatibility-status" role="status"></p>
+            <div class="tool-actions">
+              <button
+                id="refresh-site-compatibility"
+                type="button"
+                data-i18n="refreshCompatibility"
+              >
+                Show remembered website count</button
+              ><button
+                id="clear-site-compatibility"
+                type="button"
+                data-i18n="clearCompatibility"
+                disabled
+              >
+                Clear remembered websites
+              </button>
+            </div>
+          </details>
           <div class="tool-actions">
             <button
               type="button"
@@ -649,6 +697,20 @@
                   ></label
                 >
                 <div class="field">
+                  <label for="browser-mode" data-i18n="browserMode">Browser compatibility</label>
+                  <select id="browser-mode" aria-describedby="browser-mode-hint">
+                    <option value="auto" data-i18n="browserAuto">Automatic</option>
+                    <option value="off" data-i18n="browserOff">Off</option>
+                    <option value="compatible" data-i18n="browserCompatible">
+                      Always use compatible mode
+                    </option>
+                  </select>
+                  <p id="browser-mode-hint" class="hint" data-i18n="browserModeHint">
+                    Helps websites that reject ordinary downloads. It does not sign you in or
+                    complete interactive browser checks. Automatic may try compatible mode once.
+                  </p>
+                </div>
+                <div class="field">
                   <label for="download-cookie-source" data-i18n="cookieSource">Cookie source</label
                   ><select id="download-cookie-source" aria-describedby="download-cookie-help">
                     <option value="default" data-i18n="useSettings">Use settings</option>
@@ -804,7 +866,10 @@
         </p>
         <p id="retry-title" class="url-text"></p>
         <p id="retry-destination" class="hint"></p>
-        <pre id="retry-original-error" class="error-detail"></pre>
+        <details id="retry-error-details">
+          <summary data-i18n="errorDetails">Error details</summary>
+          <pre id="retry-original-error" class="error-detail"></pre>
+        </details>
         <section
           id="retry-guidance"
           class="setup-guidance"
@@ -817,6 +882,9 @@
           <div class="tool-actions">
             <button id="retry-copy-source" type="button" data-i18n="copySourceLink">
               Copy source link
+            </button>
+            <button id="retry-open-source" type="button" data-i18n="openSource">
+              Open source in browser
             </button>
             <button id="retry-update-tools" type="button" data-i18n="showToolUpdates">
               Show yt-dlp updates
@@ -884,6 +952,20 @@
             <option value="vivaldi">Vivaldi</option>
           </select>
           <p id="retry-cookie-help" class="hint"></p>
+        </div>
+        <div class="field">
+          <label for="retry-browser-mode" data-i18n="browserMode">Browser compatibility</label>
+          <select id="retry-browser-mode" aria-describedby="retry-browser-mode-hint">
+            <option value="auto" data-i18n="browserAuto">Automatic</option>
+            <option value="off" data-i18n="browserOff">Off</option>
+            <option value="compatible" data-i18n="browserCompatible">
+              Always use compatible mode
+            </option>
+          </select>
+          <p id="retry-browser-mode-hint" class="hint" data-i18n="browserModeHint">
+            Helps websites that reject ordinary downloads. It does not sign you in or complete
+            interactive browser checks. Automatic may try compatible mode once.
+          </p>
         </div>
         <div class="field" id="retry-cookie-field" hidden>
           <label for="retry-cookie-file" data-i18n="cookieFile">Cookie file</label>

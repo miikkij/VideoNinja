@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
 // Real renderer, IPC, queue, OS encryption and disk persistence. Only external
-// media executables and native dialogs use deterministic fixtures here.
+// media executables, native dialogs and opening external links use deterministic
+// fixtures here. Automatic tool maintenance stays off: no real install/network.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const packaged = process.argv.includes('--packaged');
@@ -42,7 +43,15 @@ await fs.writeFile(
       downloadPath: downloads,
       language: 'en',
       checkUpdatesOnStartup: false,
+      autoToolUpdates: false,
     },
+    siteCompatibility: [
+      {
+        origin: 'https://example.invalid',
+        version: 'fixture',
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      },
+    ],
   }),
 );
 const env = { ...process.env, VIDEONINJA_USER_DATA: profile, VIDEONINJA_HEADLESS: '1' };
@@ -79,13 +88,17 @@ async function waitHistory(page, count) {
 }
 try {
   let page = await launch();
-  await application.evaluate(({ app, dialog }, folder) => {
+  await application.evaluate(({ app, dialog, shell }, folder) => {
     const tools = process.mainModule.require(app.getAppPath() + '/src/main/ytdlp.js');
     const fileSystem = process.mainModule.require('node:fs');
     const nodePath = process.mainModule.require('node:path');
     globalThis.featureCalls = [];
+    globalThis.featureOpenedSources = [];
     globalThis.holdFeatureJobs = false;
     dialog.showMessageBox = async () => ({ response: 1 });
+    shell.openExternal = async (url) => {
+      globalThis.featureOpenedSources.push(url);
+    };
     tools.checkYtDlpAvailability = async () => ({
       available: true,
       version: 'fixture',
@@ -159,6 +172,11 @@ try {
     });
     tools.downloadVideo = async (url, _folder, options, progress, { signal }) => {
       globalThis.featureCalls.push({ url, options });
+      if (url.endsWith('/episode-503'))
+        return {
+          success: false,
+          error: 'ERROR: Cloudflare HTTP 403 browser challenge <img src=x onerror=alert(1)>',
+        };
       if (globalThis.holdFeatureJobs)
         return new Promise((resolve) => {
           progress({ percent: 20, status: 'downloading' });
@@ -183,6 +201,33 @@ try {
   }, downloads);
   await page.locator('#settings-toggle').click();
   await page.locator('#recheck-tools').click();
+  assert.equal((await state(page)).settings.autoToolUpdates, false);
+  assert.equal((await state(page)).settings.ytdlpChannel, 'nightly');
+  await page.locator('#ytdlp-channel').selectOption('stable');
+  await page.waitForFunction(
+    async () => (await window.videoNinja.getInitialState()).data.settings.ytdlpChannel === 'stable',
+  );
+  await page.locator('#tool-maintenance-settings > summary').click();
+  assert.equal(await page.locator('#auto-tool-updates').isChecked(), false);
+  assert.equal(await page.locator('#check-tool-maintenance').isDisabled(), true);
+  const maintenance = await page.evaluate(() =>
+    window.videoNinja.toolMaintenance({ action: 'status' }),
+  );
+  assert.equal(maintenance.ok, true);
+  assert.equal(maintenance.data.maintenance.status, 'idle');
+  await page.locator('#site-compatibility-settings > summary').click();
+  await page.waitForFunction(
+    () => document.querySelector('#clear-site-compatibility').disabled === false,
+  );
+  const remembered = await page.evaluate(() => window.videoNinja.getSiteCompatibility());
+  assert.equal(remembered.ok, true);
+  assert.equal(remembered.data.length, 1);
+  assert.equal(remembered.data[0].origin, 'https://example.invalid');
+  await page.locator('#clear-site-compatibility').click();
+  await page.waitForFunction(
+    async () => (await window.videoNinja.getSiteCompatibility()).data.length === 0,
+  );
+  assert.equal(await page.locator('#clear-site-compatibility').isDisabled(), true);
   await page.locator('#theme').selectOption('dark');
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
   await page.waitForFunction(
@@ -215,11 +260,13 @@ try {
   await page.locator('#format-audio').selectOption('140');
   assert.match(await page.locator('#format-select option:checked').textContent(), /h264/);
   assert.match(await page.locator('#format-details').textContent(), /9 KiB/);
+  await page.locator('#browser-mode').selectOption('off');
   await page.locator('#add-downloads').click();
   await waitHistory(page, 1);
   const completed = (await state(page)).queue.history[0];
   assert.equal(completed.options.formatId, '137+140');
   assert.equal(completed.options.subtitleLang, 'en,fi');
+  assert.equal(completed.options.browserMode, 'off');
   const duplicate = await page.evaluate(
     (item) => window.videoNinja.addDownloads({ urls: [item.url], options: item.options }),
     completed,
@@ -228,6 +275,7 @@ try {
   await waitHistory(page, 2);
   assert.ok((await state(page)).queue.history.some((item) => item.status === 'skipped'));
   assert.equal(await application.evaluate(() => globalThis.featureCalls.length), 1);
+  await page.locator('#browser-mode').selectOption('auto');
 
   // Search and selection use absolute indexes on the page beyond the first500.
   await page.locator('#video-urls').fill('https://example.invalid/playlist');
@@ -247,6 +295,40 @@ try {
   const calls = await application.evaluate(() => globalThis.featureCalls.map((call) => call.url));
   assert.ok(calls.includes('https://example.invalid/episode-502'));
   assert.ok(calls.includes('https://example.invalid/episode-503'));
+  const episodeOptions = await application.evaluate(() =>
+    globalThis.featureCalls
+      .filter((call) => call.url.includes('/episode-'))
+      .map((call) => call.options),
+  );
+  assert.ok(episodeOptions.every((options) => options.browserMode === undefined));
+  const challenged = (await state(page)).queue.history.find((item) =>
+    item.url.endsWith('/episode-503'),
+  );
+  assert.equal(challenged.status, 'failed');
+  assert.equal(challenged.errorCode, 'browser-challenge');
+  const challengeRow = page.locator(`[data-id="${challenged.id}"]`);
+  assert.equal(await challengeRow.locator('.error-details').evaluate((node) => node.open), false);
+  assert.equal(await challengeRow.locator('.error-detail').isVisible(), false);
+  assert.match(await challengeRow.locator('.error-area > .hint').textContent(), /browser check/);
+  assert.equal(await challengeRow.locator('img').count(), 0);
+  assert.deepEqual(await application.evaluate(() => globalThis.featureOpenedSources), []);
+  await challengeRow.locator('.error-details > summary').click();
+  assert.equal(await challengeRow.locator('.error-detail').isVisible(), true);
+  assert.match(await challengeRow.locator('.error-detail').textContent(), /<img src=x/);
+  await challengeRow.locator('[data-action="openSource"]').click();
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector(`[data-id="${id}"] [data-action="openSource"]`).disabled === false,
+    challenged.id,
+  );
+  assert.deepEqual(await application.evaluate(() => globalThis.featureOpenedSources), [
+    'https://example.invalid/episode-503',
+  ]);
+  await challengeRow.locator('[data-action="retryOptions"]').click();
+  assert.equal(await page.locator('#retry-error-details').evaluate((node) => node.open), false);
+  assert.equal(await page.locator('#retry-cookie-source').inputValue(), '');
+  assert.equal(await page.locator('#retry-browser-mode').inputValue(), 'auto');
+  await page.locator('#cancel-retry').click();
 
   // Bulk pause/resume/cancel retains actual child lifecycle semantics.
   await application.evaluate(() => {
@@ -353,6 +435,9 @@ try {
   assert.equal(restored.settings.language, 'fi');
   assert.equal(restored.settings.profiles[0].options.subtitleLang, 'en,fi');
   assert.equal(restored.settings.globalRateKbps, 512);
+  assert.equal(restored.settings.ytdlpChannel, 'stable');
+  assert.equal(restored.settings.autoToolUpdates, false);
+  assert.deepEqual((await page.evaluate(() => window.videoNinja.getSiteCompatibility())).data, []);
   assert.equal(restored.queue.history.length, 5);
   assert.equal(restored.privacy.encrypted, encryption);
   assert.deepEqual(
@@ -361,7 +446,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    `Feature smoke passed: profiles, exact formats, subtitles, archive, playlist paging/search/ranges, bulk actions, selective history, private session, theme and persisted restart. OS encryption: ${encryption ? 'round-trip verified' : 'unavailable (correctly disabled)'}.`,
+    `Feature smoke passed: profiles, exact formats, subtitles, archive, playlist paging/search/ranges, bulk actions, selective history, private session, theme, browser modes/challenge recovery, explicit source links, tool channel, maintenance opt-in, compatibility cache and persisted restart. OS encryption: ${encryption ? 'round-trip verified' : 'unavailable (correctly disabled)'}.`,
   );
 } finally {
   if (application) await application.close();

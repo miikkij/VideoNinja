@@ -32,6 +32,8 @@
     processingTimeoutSeconds: 900,
     notifications: false,
     checkUpdatesOnStartup: true,
+    autoToolUpdates: false,
+    ytdlpChannel: 'nightly',
   };
   const numericSettings = {
     'global-rate': 'globalRateKbps',
@@ -49,6 +51,7 @@
     'private-mode': 'privateMode',
     'encrypted-storage': 'encryptedStorage',
     'check-updates-startup': 'checkUpdatesOnStartup',
+    'auto-tool-updates': 'autoToolUpdates',
   };
   let privacy = {};
   let appUpdateState = { status: 'idle' };
@@ -56,6 +59,9 @@
   let toolBusy = false;
   let toolSetup = null;
   let toolDiagnostics = null;
+  let maintenanceBusy = false;
+  let siteCompatibility = null;
+  let compatibilityBusy = false;
   let metadataFormats = [];
   let formatUrl = null;
   const selectedQueue = new Set();
@@ -268,7 +274,8 @@
     $('ejs-status').textContent =
       typeof ejs === 'object' && ejs ? t(`ejs_${ejs.status}`) : t('ejs_not_checked');
     document.querySelectorAll('[data-tool-action]').forEach((button) => {
-      button.disabled = !initialized || toolBusy;
+      button.disabled =
+        !initialized || toolBusy || maintenanceBusy || tools.maintenance?.status === 'updating';
       if (button.dataset.toolAction === 'install' || button.dataset.toolAction === 'update') {
         const plan = toolSetup?.tools?.find((item) => item.tool === button.dataset.tool);
         const available =
@@ -291,20 +298,115 @@
     $('tool-help').open = Boolean(
       tools.ytdlp && (!tools.ytdlp.available || !tools.ffmpeg?.available),
     );
-    $('ytdlp-channel').disabled = !initialized || toolBusy;
+    $('ytdlp-channel').disabled =
+      !initialized || toolBusy || maintenanceBusy || tools.maintenance?.status === 'updating';
+    renderMaintenance();
     renderReadiness();
   }
+  function renderMaintenance() {
+    const maintenance = tools.maintenance || { status: 'idle' };
+    const status = [
+      'idle',
+      'checking',
+      'updating',
+      'deferred',
+      'current',
+      'updated',
+      'error',
+    ].includes(maintenance.status)
+      ? maintenance.status
+      : 'idle';
+    const parts = [t(`maintenance_${status}`)];
+    const checked = new Date(maintenance.lastCheckedAt);
+    if (maintenance.lastCheckedAt && !Number.isNaN(checked.getTime()))
+      parts.push(t('maintenanceCheckedAt', { date: checked.toLocaleString(i18n.locale()) }));
+    $('tool-maintenance-status').textContent = parts.join(' · ');
+    $('tool-maintenance-list').replaceChildren();
+    for (const item of (maintenance.tools || []).slice(0, 10)) {
+      const state = [
+        'current',
+        'update-available',
+        'updating',
+        'updated',
+        'deferred',
+        'unmanaged',
+        'needs-review',
+        'error',
+      ].includes(item.status)
+        ? item.status
+        : 'needs-review';
+      const label = item.tool === 'runtime' ? t('runtime') : String(item.tool || '');
+      const versions = [
+        item.installedVersion,
+        item.availableVersion && t('maintenanceAvailable', { version: item.availableVersion }),
+      ].filter(Boolean);
+      create('li', '', $('tool-maintenance-list')).textContent =
+        `${label}: ${t(`maintenanceTool_${state}`)}${versions.length ? ` (${versions.join(' · ')})` : ''}`;
+    }
+    $('tool-maintenance-list').hidden = !$('tool-maintenance-list').childElementCount;
+    $('tool-maintenance-error').hidden = !maintenance.error;
+    $('tool-maintenance-error-text').textContent = maintenance.error || '';
+    $('check-tool-maintenance').disabled =
+      !initialized ||
+      !settings.autoToolUpdates ||
+      toolBusy ||
+      maintenanceBusy ||
+      ['checking', 'updating'].includes(status);
+  }
+  async function checkMaintenance() {
+    if (maintenanceBusy || toolBusy || !settings.autoToolUpdates) return;
+    maintenanceBusy = true;
+    renderTools();
+    try {
+      if (!(await saveChain)) throw new Error(t('saveFailed'));
+      const result = await request('toolMaintenance', { action: 'check' });
+      if (result?.maintenance) tools.maintenance = result.maintenance;
+    } catch (error) {
+      notice(error.message, true);
+    } finally {
+      maintenanceBusy = false;
+      renderTools();
+    }
+  }
+  function renderCompatibility() {
+    $('site-compatibility-status').textContent = compatibilityBusy
+      ? t('checking')
+      : siteCompatibility === null
+        ? t('compatibilityNotChecked')
+        : t('compatibilityCount', { count: siteCompatibility.length });
+    $('refresh-site-compatibility').disabled = !initialized || compatibilityBusy;
+    $('clear-site-compatibility').disabled =
+      !initialized || compatibilityBusy || !siteCompatibility?.length;
+  }
+  async function updateCompatibility(clear = false) {
+    if (compatibilityBusy) return;
+    compatibilityBusy = true;
+    renderCompatibility();
+    try {
+      const result = clear
+        ? await request('clearSiteCompatibility', {})
+        : await request('getSiteCompatibility');
+      if (Array.isArray(result)) siteCompatibility = result;
+      if (clear) notice(t('compatibilityCleared'));
+    } catch (error) {
+      notice(error.message, true);
+    } finally {
+      compatibilityBusy = false;
+      renderCompatibility();
+    }
+  }
   function renderReadiness() {
+    const busy = toolBusy || tools.maintenance?.status === 'updating';
     const ready =
       initialized &&
       settingsSaved &&
       Boolean(settings.downloadPath) &&
       Boolean(tools.ytdlp?.available);
-    $('add-downloads').disabled = !ready || adding || toolBusy;
-    $('preview-button').disabled = !initialized || !tools.ytdlp?.available || toolBusy;
+    $('add-downloads').disabled = !ready || adding || busy;
+    $('preview-button').disabled = !initialized || !tools.ytdlp?.available || busy;
     $('playlist-preview-button').disabled =
-      !initialized || !tools.ytdlp?.available || playlistLoading || toolBusy;
-    $('readiness').textContent = toolBusy
+      !initialized || !tools.ytdlp?.available || playlistLoading || busy;
+    $('readiness').textContent = busy
       ? t('toolsWorking')
       : !settingsSaved
         ? t('saveFailed')
@@ -321,6 +423,7 @@
     $('language').value = settings.language === 'fi' ? 'fi' : 'en';
     $('max-concurrent').value = String(settings.maxConcurrent || 1);
     $('theme').value = settings.theme || 'auto';
+    $('ytdlp-channel').value = settings.ytdlpChannel === 'stable' ? 'stable' : 'nightly';
     document.documentElement.dataset.theme = settings.theme || 'auto';
     for (const [id, key] of Object.entries(numericSettings)) $(id).value = String(settings[key]);
     for (const [id, key] of Object.entries(booleanSettings)) $(id).checked = Boolean(settings[key]);
@@ -346,6 +449,7 @@
     $('audio-format-field').hidden = $('quality').value !== 'audio';
     renderWarnings();
     renderTools();
+    renderCompatibility();
     renderDisk();
     renderQueue();
     renderPlaylistSelection();
@@ -452,9 +556,15 @@
         ? 'retryReviewDescription'
         : 'retryDescription',
     );
-    const supported = ['auth', 'access', 'cookie-access', 'extractor', 'options-review'].includes(
-      code,
-    );
+    const supported = [
+      'auth',
+      'access',
+      'cookie-access',
+      'extractor',
+      'options-review',
+      'browser-challenge',
+      'browser-support',
+    ].includes(code);
     $('retry-guidance').hidden = !supported;
     $('retry-guidance-steps').replaceChildren();
     if (!supported) return;
@@ -464,11 +574,16 @@
         ? ['savedOptionsReviewHelp']
         : code === 'extractor'
           ? ['extractorUpdateHelp', 'accessBrowserHelp']
-          : code === 'cookie-access'
-            ? ['cookieLockHelp', 'cookieDecryptHelp', 'cookieFileHelp']
-            : ['accessBrowserHelp', 'accessCookiesHelp', 'extractorUpdateHelp'];
+          : code === 'browser-challenge'
+            ? ['browserChallengeHelp', 'browserModeHint', 'extractorUpdateHelp']
+            : code === 'browser-support'
+              ? ['browserSupportHelp', 'browserModeHint']
+              : code === 'cookie-access'
+                ? ['cookieLockHelp', 'cookieDecryptHelp', 'cookieFileHelp']
+                : ['accessBrowserHelp', 'accessCookiesHelp', 'extractorUpdateHelp'];
     for (const key of steps) create('li', '', $('retry-guidance-steps')).textContent = t(key);
     $('retry-update-tools').hidden = ['cookie-access', 'options-review'].includes(code);
+    $('retry-open-source').hidden = !canOpenSource(retryDownload);
   }
   function showToolUpdates() {
     if ($('retry-dialog').open) closeRetry();
@@ -494,6 +609,7 @@
     if (settings.extraArgs) options.extraArgs = settings.extraArgs;
     if (settings.jsRuntime && settings.jsRuntime !== 'auto') options.jsRuntime = settings.jsRuntime;
     if ($('force-ipv4').checked) options.forceIpv4 = true;
+    if ($('browser-mode').value !== 'auto') options.browserMode = $('browser-mode').value;
     if ($('referer').value.trim()) options.referer = $('referer').value.trim();
     if ($('extractor-args').value.trim()) options.extractorArgs = $('extractor-args').value.trim();
     const rate = readNumber('download-rate');
@@ -648,6 +764,7 @@
     $('subtitle-auto').checked = Boolean(options.subtitleAuto);
     $('subtitle-fields').hidden = !options.subtitles;
     $('force-ipv4').checked = Boolean(options.forceIpv4);
+    $('browser-mode').value = options.browserMode || 'auto';
     $('referer').value = options.referer || '';
     $('extractor-args').value = options.extractorArgs || '';
     resetFormats();
@@ -840,11 +957,12 @@
     container.hidden = !container.childElementCount;
   }
   async function runToolAction(tool, actionName) {
-    if (toolBusy) return;
+    if (toolBusy || maintenanceBusy || tools.maintenance?.status === 'updating') return;
     toolBusy = true;
     $('tool-action-status').textContent = t('toolWorking', { tool });
     renderTools();
     try {
+      if (!(await saveChain)) throw new Error(t('saveFailed'));
       const input = { tool, action: actionName };
       if (tool === 'yt-dlp' && ['install', 'update'].includes(actionName))
         input.channel = $('ytdlp-channel').value;
@@ -883,7 +1001,6 @@
     const actions = create('div', 'download-actions', element);
     const errorArea = create('div', 'error-area', element);
     const errorTitle = create('p', '', errorArea);
-    const errorDetail = create('pre', 'error-detail', errorArea);
     const errorNext = create('p', 'hint', errorArea);
     const remedy = create('button', '', errorArea);
     remedy.type = 'button';
@@ -895,8 +1012,21 @@
       },
       controller.signal,
     );
-    const copy = create('button', '', errorArea);
+    const openSource = create('button', '', errorArea);
+    openSource.type = 'button';
+    openSource.dataset.action = 'openSource';
+    listen(
+      openSource,
+      'click',
+      () => action(openSource, () => request('openSource', id)),
+      controller.signal,
+    );
+    const errorDetails = create('details', 'error-details', errorArea);
+    const errorSummary = create('summary', '', errorDetails);
+    const errorDetail = create('pre', 'error-detail', errorDetails);
+    const copy = create('button', '', errorDetails);
     copy.type = 'button';
+    copy.dataset.action = 'copyError';
     listen(
       copy,
       'click',
@@ -921,9 +1051,12 @@
       actions,
       errorArea,
       errorTitle,
+      errorDetails,
+      errorSummary,
       errorDetail,
       errorNext,
       remedy,
+      openSource,
       copy,
       buttons: new Map(),
       controller,
@@ -1034,16 +1167,25 @@
         'waiting-disk',
         'waiting-schedule',
         'waiting-duplicate',
+        'waiting-site',
       ].includes(phase)
         ? phase
         : download.status;
     const stateParts = [t(stateKey || 'pending')];
     if (download.attempts > 1) stateParts.push(t('attemptCount', { count: download.attempts }));
-    if (download.retryAt && phase === 'waiting-retry') {
+    if (download.retryAt && ['waiting-retry', 'waiting-site'].includes(phase)) {
       const retryDate = new Date(download.retryAt);
       if (!Number.isNaN(retryDate.getTime()))
         stateParts.push(t('retryTime', { time: retryDate.toLocaleTimeString(i18n.locale()) }));
     }
+    if (['browser-retry', 'browser-reused'].includes(download.recovery?.type))
+      stateParts.push(
+        t(
+          download.recovery.type === 'browser-reused'
+            ? 'browserRecoveryReused'
+            : 'browserRecoveryRetry',
+        ),
+      );
     if (download.integrity?.status === 'verified') stateParts.push(t('integrityVerified'));
     else if (download.integrity?.status === 'size-only') stateParts.push(t('integritySize'));
     if (download.status === 'downloading' && Number.isFinite(download.speed) && download.speed > 0)
@@ -1062,16 +1204,19 @@
     row.percent.textContent = `${Math.round(progress)}%`;
     row.errorArea.hidden = !download.error && !download.optionsNeedReview;
     row.errorTitle.textContent = t(
-      download.optionsNeedReview ? 'savedOptionsHeading' : 'errorDetails',
+      download.optionsNeedReview ? 'savedOptionsHeading' : 'nextSteps',
     );
     row.errorDetail.textContent = download.error || '';
-    row.errorDetail.hidden = !download.error;
+    row.errorDetails.hidden = !download.error;
+    row.errorSummary.textContent = t('errorDetails');
     const remedy = jobRemedy(download);
     row.errorNext.textContent = t(remedy?.message || 'errorNext');
     row.remedy.hidden = !remedy?.action;
     row.remedy.textContent = remedy?.action ? t(remedy.action) : '';
     row.copy.textContent = t('copyError');
     row.copy.hidden = !download.error;
+    row.openSource.textContent = t('openSource');
+    row.openSource.hidden = !canOpenSource(download);
     const actions = desiredActions(download, list);
     for (const [name, button] of row.buttons) {
       if (!actions.includes(name)) {
@@ -1171,6 +1316,8 @@
       access: { message: 'remedy_ACCESS', action: 'fixAccess' },
       'cookie-access': { message: 'remedy_COOKIE_ACCESS', action: 'fixCookies' },
       extractor: { message: 'remedy_EXTRACTOR', action: 'fixExtractor' },
+      'browser-challenge': { message: 'remedy_BROWSER_CHALLENGE', action: 'fixBrowser' },
+      'browser-support': { message: 'remedy_BROWSER_SUPPORT', action: 'fixTools' },
       network: { message: 'remedy_NETWORK', action: 'quickRetry' },
       'rate-limit': { message: 'remedy_RATE_LIMIT', action: 'fixLimits' },
       'tool-missing': { message: 'remedy_TOOL', action: 'fixTools' },
@@ -1181,6 +1328,11 @@
       format: { message: 'remedy_FORMAT', action: 'retryOptions' },
       integrity: { message: 'remedy_INTEGRITY', action: 'quickRetry' },
     }[code];
+  }
+  function canOpenSource(download) {
+    return ['browser-challenge', 'auth', 'access', 'unavailable', 'unsupported'].includes(
+      String(download?.errorCode || '').toLowerCase(),
+    );
   }
   async function runRemedy(row, button) {
     if (!row) return;
@@ -1193,6 +1345,11 @@
     if (['fixAuthentication', 'fixAccess', 'fixCookies'].includes(remedy.action)) {
       openRetry(row.download, button);
       $('retry-cookie-source').focus();
+      return;
+    }
+    if (remedy.action === 'fixBrowser') {
+      openRetry(row.download, button);
+      $('retry-browser-mode').focus();
       return;
     }
     if (remedy.action === 'fixExtractor') {
@@ -1322,7 +1479,8 @@
       folder: settings.downloadPath || download.outputPath || '',
     });
     $('retry-original-error').textContent = download.error || '';
-    $('retry-original-error').hidden = !download.error;
+    $('retry-error-details').hidden = !download.error;
+    $('retry-error-details').open = false;
     $('retry-quality').value = options.quality || 'best';
     $('retry-audio-format').value = options.audioFormat || 'original';
     $('retry-audio-format-field').hidden = $('retry-quality').value !== 'audio';
@@ -1337,6 +1495,7 @@
     $('retry-cookie-field').hidden = $('retry-cookie-source').value !== 'file';
     $('retry-runtime').value = options.jsRuntime || 'auto';
     $('retry-ipv4').checked = Boolean(options.forceIpv4);
+    $('retry-browser-mode').value = options.browserMode || 'auto';
     $('retry-user-agent').value = options.userAgent || '';
     $('retry-referer').value = options.referer || '';
     $('retry-extractor').value = options.extractorArgs || '';
@@ -1656,6 +1815,22 @@
     document.documentElement.dataset.theme = $('theme').value;
     void saveSettings({ theme: $('theme').value });
   });
+  listen($('ytdlp-channel'), 'change', () => {
+    void saveSettings({ ytdlpChannel: $('ytdlp-channel').value });
+  });
+  listen($('check-tool-maintenance'), 'click', () => {
+    void checkMaintenance();
+  });
+  listen($('refresh-site-compatibility'), 'click', () => {
+    void updateCompatibility();
+  });
+  listen($('clear-site-compatibility'), 'click', () => {
+    void updateCompatibility(true);
+  });
+  listen($('site-compatibility-settings'), 'toggle', () => {
+    if ($('site-compatibility-settings').open && siteCompatibility === null)
+      void updateCompatibility();
+  });
   for (const [id, key] of Object.entries(numericSettings))
     listen($(id), 'change', () => {
       try {
@@ -1668,6 +1843,7 @@
     listen($(id), 'change', () => {
       void saveSettings({ [key]: $(id).checked });
       if (id === 'schedule-enabled') $('schedule-fields').hidden = !$(id).checked;
+      if (id === 'auto-tool-updates') renderMaintenance();
     });
   for (const id of ['schedule-start', 'schedule-end'])
     listen($(id), 'change', () => {
@@ -1950,6 +2126,11 @@
     renderCookieHelp();
   });
   listen($('retry-update-tools'), 'click', showToolUpdates);
+  listen($('retry-open-source'), 'click', () =>
+    action($('retry-open-source'), async () => {
+      if (retryDownload) await request('openSource', retryDownload.id);
+    }),
+  );
   listen($('retry-copy-source'), 'click', () =>
     action($('retry-copy-source'), async () => {
       if (!retryDownload) return;
@@ -1985,6 +2166,8 @@
       }
       if ($('retry-runtime').value !== 'auto') options.jsRuntime = $('retry-runtime').value;
       if ($('retry-ipv4').checked) options.forceIpv4 = true;
+      if ($('retry-browser-mode').value !== 'auto')
+        options.browserMode = $('retry-browser-mode').value;
       for (const [id, key] of [
         ['retry-user-agent', 'userAgent'],
         ['retry-referer', 'referer'],

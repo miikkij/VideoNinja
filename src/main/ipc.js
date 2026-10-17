@@ -210,6 +210,45 @@ function createHandlers(deps) {
     return true;
   };
 
+  // Manual and scheduled tool work share one admission lock, including the
+  // post-install probes. Scheduling cannot restart a paused job underneath it.
+  const withToolLock = async (operation, { signal } = {}) => {
+    ready();
+    const state = queue.getQueueState();
+    if (
+      state.queue.some((job) => job.status !== 'paused' || job.pausedBySchedule) ||
+      state.isProcessing ||
+      previewTasks.size ||
+      (deps.hasToolCheck?.() ?? false)
+    )
+      throw new UserError(
+        'Pause queued downloads and close previews before changing tools. Wait for active processes to finish stopping.',
+        'TOOLS_BUSY',
+      );
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const release = queue.holdScheduling?.();
+    toolController = controller;
+    const task = Promise.resolve().then(async () => {
+      if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
+      const result = await operation({ signal: controller.signal });
+      if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
+      const currentTools = await deps.recheckTools();
+      return { result, tools: currentTools, setup: deps.toolManager.getSetupPlan() };
+    });
+    toolTask = task;
+    try {
+      return await task;
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      if (toolTask === task) toolTask = null;
+      if (toolController === controller) toolController = null;
+      release?.({ start: !disposing });
+    }
+  };
+
   const handlers = {
     getInitialState: () => deps.getInitialState(),
     recheckTools: () => {
@@ -235,43 +274,51 @@ function createHandlers(deps) {
       ready();
       if (input.action === 'check')
         return { tools: await deps.recheckTools(), setup: deps.toolManager.getSetupPlan() };
-      const queueState = queue.getQueueState();
-      if (
-        queueState.queue.some((job) => job.status !== 'paused' || job.pausedBySchedule) ||
-        queueState.isProcessing ||
-        previewTasks.size ||
-        (deps.hasToolCheck?.() ?? false)
-      )
-        throw new UserError(
-          'Pause queued downloads and close previews before changing tools. Wait for active processes to finish stopping.',
-          'TOOLS_BUSY',
-        );
-      const controller = new AbortController();
-      toolController = controller;
-      const task = Promise.resolve().then(async () => {
-        if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
-        const result = await (input.action === 'diagnose'
-          ? deps.toolManager.diagnose({ signal: controller.signal })
-          : deps.toolManager.install(input.tool, {
-              signal: controller.signal,
-              ...(input.channel ? { channel: input.channel } : {}),
-            }));
-        if (controller.signal.aborted || disposing) throw new Error('Tool operation cancelled.');
-        const currentTools = await deps.recheckTools();
-        return { result, tools: currentTools, setup: deps.toolManager.getSetupPlan() };
-      });
-      toolTask = task;
       try {
-        return await task;
-      } catch {
+        return await withToolLock(({ signal }) =>
+          input.action === 'diagnose'
+            ? deps.toolManager.diagnose({ signal })
+            : deps.toolManager.install(input.tool, {
+                signal,
+                ...(input.tool === 'yt-dlp'
+                  ? { channel: input.channel || getSettings().ytdlpChannel || 'nightly' }
+                  : {}),
+              }),
+        );
+      } catch (error) {
+        if (error instanceof UserError) throw error;
         throw new UserError(
           'The tool operation failed. Check the connection and setup instructions; the previous installation was kept.',
           'TOOL_OPERATION_FAILED',
         );
-      } finally {
-        if (toolTask === task) toolTask = null;
-        if (toolController === controller) toolController = null;
       }
+    },
+    toolMaintenance: async (input) => {
+      record(input, ['action']);
+      if (!['check', 'status'].includes(input.action) || !deps.getToolMaintenance?.())
+        throw new UserError('Tool maintenance is unavailable.', 'TOOLS_UNAVAILABLE');
+      const maintenance = deps.getToolMaintenance();
+      return {
+        maintenance:
+          input.action === 'check' ? await maintenance.checkNow() : maintenance.getState(),
+      };
+    },
+    getSiteCompatibility: () => deps.siteCompatibility?.list() || [],
+    clearSiteCompatibility: (input = {}) => {
+      record(input, ['origin']);
+      if (input.origin !== undefined) {
+        const url = asUrl(input.origin);
+        if (new URL(url).origin !== input.origin)
+          throw new UserError('Choose a valid site origin.');
+      }
+      deps.siteCompatibility?.clear(input.origin);
+      return deps.siteCompatibility?.list() || [];
+    },
+    openSource: async (value) => {
+      const job = queue.getDownload(id(value));
+      if (!job) throw new UserError('The download is no longer available.', 'INVALID_STATE');
+      await shell.openExternal(asUrl(job.url));
+      return true;
     },
     appUpdate: (input) => {
       record(input, ['action']);
@@ -594,7 +641,10 @@ function createHandlers(deps) {
       const controller = new AbortController();
       previewController = controller;
       const task = Promise.resolve().then(() =>
-        tools.fetchMetadata(url, options, { signal: controller.signal }),
+        tools.fetchMetadata(url, options, {
+          signal: controller.signal,
+          private: Boolean(getSettings().privateMode),
+        }),
       );
       previewTasks.add(task);
       try {
@@ -626,7 +676,12 @@ function createHandlers(deps) {
       const controller = new AbortController();
       playlistController = controller;
       const task = Promise.resolve().then(() =>
-        tools.fetchPlaylist(url, options, { signal: controller.signal, start, pageSize }),
+        tools.fetchPlaylist(url, options, {
+          signal: controller.signal,
+          start,
+          pageSize,
+          private: Boolean(getSettings().privateMode),
+        }),
       );
       previewTasks.add(task);
       try {
@@ -737,6 +792,7 @@ function createHandlers(deps) {
   };
   return {
     handlers,
+    runToolOperation: async (operation, options) => (await withToolLock(operation, options)).result,
     async dispose() {
       disposing = true;
       previewController?.abort();

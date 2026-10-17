@@ -96,10 +96,82 @@ describe('feature IPC validation', () => {
       { notifications: 'yes' },
       { scheduleStart: '25:00' },
       { profiles: [] },
+      { autoToolUpdates: 'yes' },
+      { ytdlpChannel: 'arbitrary/repository' },
     ])
       await expect(handlers.saveSettings(value)).rejects.toThrow();
     await expect(handlers.saveSettings({ encryptedStorage: true })).rejects.toThrow(/key store/);
     expect(settings().encryptedStorage).toBe(false);
+  });
+  it('remembers the chosen update channel and keeps maintenance opt-in', async () => {
+    const { handlers, settings, toolManager } = fixture();
+    expect(settings().autoToolUpdates).toBe(false);
+    await handlers.saveSettings({ ytdlpChannel: 'stable', autoToolUpdates: true });
+    expect(settings()).toMatchObject({ ytdlpChannel: 'stable', autoToolUpdates: true });
+    await handlers.toolAction({ action: 'update', tool: 'yt-dlp' });
+    expect(toolManager.install).toHaveBeenCalledWith('yt-dlp', {
+      channel: 'stable',
+      signal: expect.any(AbortSignal),
+    });
+  });
+  it('opens only the validated source of an existing job and rejects arbitrary URLs', async () => {
+    const shell = { openExternal: vi.fn(async () => {}) };
+    const { handlers, queue } = fixture({ shell });
+    queue.getDownload = vi.fn((value) =>
+      value === 'job' ? { url: 'https://example.com/original' } : null,
+    );
+    await handlers.openSource('job');
+    expect(shell.openExternal).toHaveBeenCalledWith('https://example.com/original');
+    await expect(handlers.openSource('missing')).rejects.toThrow();
+    await expect(handlers.openSource('https://unselected.example')).rejects.toThrow();
+    queue.getDownload.mockReturnValue({ url: 'file:///private' });
+    await expect(handlers.openSource('job')).rejects.toThrow();
+    expect(shell.openExternal).toHaveBeenCalledOnce();
+  });
+  it('allows clearing one exact remembered origin or all and validates the maintenance command', async () => {
+    const siteCompatibility = { list: vi.fn(() => []), clear: vi.fn() };
+    const maintenance = {
+      getState: () => ({ status: 'idle' }),
+      checkNow: vi.fn(async () => ({ status: 'current' })),
+    };
+    const { handlers } = fixture({ siteCompatibility, getToolMaintenance: () => maintenance });
+    expect(handlers.getSiteCompatibility()).toEqual([]);
+    expect(handlers.clearSiteCompatibility({ origin: 'https://example.com' })).toEqual([]);
+    expect(siteCompatibility.clear).toHaveBeenCalledWith('https://example.com');
+    expect(() => handlers.clearSiteCompatibility({ origin: 'https://example.com/path' })).toThrow();
+    handlers.clearSiteCompatibility({});
+    expect(siteCompatibility.clear).toHaveBeenLastCalledWith(undefined);
+    expect(await handlers.toolMaintenance({ action: 'check' })).toEqual({
+      maintenance: { status: 'current' },
+    });
+    await expect(handlers.toolMaintenance({ action: 'install' })).rejects.toThrow();
+  });
+  it('holds the same admission lock during automatic tool work and waits for cancellation cleanup', async () => {
+    const { handlers, queue, runToolOperation, dispose } = fixture();
+    const released = vi.fn();
+    queue.holdScheduling = vi.fn(() => released);
+    let control, settle;
+    const running = runToolOperation(({ signal }) => {
+      control = signal;
+      return new Promise((resolve) => {
+        settle = resolve;
+      });
+    });
+    const failed = expect(running).rejects.toThrow(/cancelled/);
+    await Promise.resolve();
+    expect(queue.holdScheduling).toHaveBeenCalledOnce();
+    await expect(handlers.addDownloads({ urls: ['https://example.com/a'] })).rejects.toMatchObject({
+      code: 'TOOLS_BUSY',
+    });
+    await expect(handlers.toolAction({ action: 'update', tool: 'yt-dlp' })).rejects.toMatchObject({
+      code: 'TOOLS_BUSY',
+    });
+    const stopping = dispose();
+    expect(control.aborted).toBe(true);
+    expect(released).not.toHaveBeenCalled();
+    settle({});
+    await Promise.all([stopping, failed]);
+    expect(released).toHaveBeenCalledWith({ start: false });
   });
   it('stores reusable profiles without secrets or source-specific formats', async () => {
     const { handlers, settings } = fixture();

@@ -5,6 +5,8 @@ const DEFINITIONS = Object.freeze({
   auth: { action: 'update-cookies', retryable: false },
   access: { action: 'check-access', retryable: false },
   'cookie-access': { action: 'check-cookies', retryable: false },
+  'browser-challenge': { action: 'check-browser', retryable: false },
+  'browser-support': { action: 'check-tools', retryable: false },
   extractor: { action: 'update-tools', retryable: false },
   'options-review': { action: 'review-options', retryable: false },
   unavailable: { action: 'open-source', retryable: false },
@@ -17,17 +19,28 @@ const DEFINITIONS = Object.freeze({
   unknown: { action: 'view-details', retryable: false },
 });
 
-function classifyDownloadError(error) {
+function failureReason(error) {
   const message = (typeof error === 'string' ? error : error?.message || '').slice(0, 16000);
-  const supplied = typeof error === 'object' ? error?.downloadCode : null;
   // Extractor warnings describe failed fallback attempts, not necessarily the
   // final failure. Classify ERROR lines first so an earlier 404/429 or cookie
   // warning cannot override the actual reason the process stopped.
   const failures = message.split(/\r?\n/u).filter((line) => /^\s*ERROR:/iu.test(line));
-  const reason = failures.length ? failures.join('\n') : message;
+  return failures.length ? failures.join('\n') : message;
+}
+
+function isBrowserChallenge(error) {
+  const reason = failureReason(error);
+  return /cloudflare/iu.test(reason) && /403|challenge|anti.bot|impersonat/iu.test(reason);
+}
+
+function classifyDownloadError(error) {
+  const supplied = typeof error === 'object' ? error?.downloadCode : null;
+  const reason = failureReason(error);
   let code = Object.hasOwn(DEFINITIONS, supplied || '') ? supplied : 'unknown';
   if (code === 'unknown') {
-    if (/download stopped making progress|media processing stopped responding/iu.test(reason))
+    if (/browser impersonation support is unavailable/iu.test(reason)) code = 'browser-support';
+    else if (isBrowserChallenge(reason)) code = 'browser-challenge';
+    else if (/download stopped making progress|media processing stopped responding/iu.test(reason))
       code = 'stalled';
     else if (
       /ENOSPC|no space left|disk (?:is )?full|not enough (?:free )?(?:disk )?space/i.test(reason)
@@ -103,4 +116,4 @@ function downloadError(code, message) {
   return error;
 }
 
-module.exports = { classifyDownloadError, downloadError };
+module.exports = { classifyDownloadError, downloadError, isBrowserChallenge };

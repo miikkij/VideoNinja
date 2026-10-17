@@ -71,6 +71,10 @@ async function boot(overrides = {}) {
     'deleteProfile',
     'queueAction',
     'deleteHistory',
+    'openSource',
+    'toolMaintenance',
+    'getSiteCompatibility',
+    'clearSiteCompatibility',
   ])
     api[method] = vi.fn(async () => ok(null));
   api.getInitialState = vi.fn(async () => ok(state));
@@ -309,7 +313,7 @@ describe('production renderer', () => {
     expect(item.querySelector('.error-detail').textContent).toBe(hostile);
     expect(item.querySelector('img')).toBeNull();
     expect(window.attacked).toBeUndefined();
-    item.querySelector('.error-area button:last-of-type').click();
+    item.querySelector('[data-action="copyError"]').click();
     await vi.waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(hostile));
   });
 
@@ -1374,6 +1378,7 @@ describe('production renderer', () => {
 
   it('opens extractor updates and sends the chosen channel only after an explicit update', async () => {
     const { api } = await boot({
+      settings: { language: 'en', downloadPath: '/downloads', ytdlpChannel: 'stable' },
       tools: { ...goodTools, ytdlp: { ...goodTools.ytdlp, stale: true, ageDays: 145 } },
       queue: {
         queue: [],
@@ -1494,6 +1499,289 @@ describe('production renderer', () => {
     expect(duplicate.querySelector('[data-action="quickRetry"]')).toBeNull();
     duplicate.querySelector('[data-action="reviewDuplicates"]').click();
     expect(document.activeElement).toBe($('skip-duplicates'));
+    expect(api.retryDownload).not.toHaveBeenCalled();
+  });
+
+  it.each(['off', 'compatible'])(
+    'sends the explicit %s browser mode without changing authentication',
+    async (mode) => {
+      const { api } = await boot({
+        settings: { language: 'en', downloadPath: '/downloads', cookieSource: 'firefox' },
+      });
+      expect($('browser-mode').value).toBe('auto');
+      $('video-urls').value = 'https://example.com/browser-check';
+      $('browser-mode').value = mode;
+      $('download-form').requestSubmit();
+      await vi.waitFor(() =>
+        expect(api.addDownloads).toHaveBeenCalledWith({
+          urls: ['https://example.com/browser-check'],
+          options: { quality: 'best', cookiesFromBrowser: 'firefox', browserMode: mode },
+        }),
+      );
+      expect(api.saveSettings).not.toHaveBeenCalled();
+      expect(api.openSource).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['en', 'fi'])(
+    'separates browser checks from login and offers an explicit source action in %s',
+    async (language) => {
+      const { api } = await boot({
+        settings: { language, downloadPath: '/downloads', cookieSource: 'chrome' },
+        queue: {
+          queue: [],
+          history: [
+            job('challenge', 'failed', {
+              errorCode: 'browser-challenge',
+              error: '<img src=x onerror=alert(1)> challenge',
+              options: { quality: '720', browserMode: 'off' },
+            }),
+          ],
+        },
+      });
+      const t = window.VideoNinjaI18n.t;
+      const row = document.querySelector('[data-id="challenge"]');
+      expect(row.querySelector('.hint').textContent).toBe(t('remedy_BROWSER_CHALLENGE'));
+      expect(row.querySelector('.error-details').open).toBe(false);
+      expect(row.querySelector('img')).toBeNull();
+      expect(api.openSource).not.toHaveBeenCalled();
+      row.querySelector('[data-action="openSource"]').click();
+      await vi.waitFor(() => expect(api.openSource).toHaveBeenCalledWith('challenge'));
+      expect(api.openExternal).not.toHaveBeenCalled();
+      row.querySelector('.error-area > button').click();
+      expect($('retry-dialog').open).toBe(true);
+      expect(document.activeElement).toBe($('retry-browser-mode'));
+      expect($('retry-browser-mode').value).toBe('off');
+      expect($('retry-cookie-source').value).toBe('');
+      expect($('retry-error-details').open).toBe(false);
+      expect($('retry-guidance').textContent).toContain(t('browserChallengeHelp'));
+      $('retry-open-source').click();
+      await vi.waitFor(() => expect(api.openSource).toHaveBeenCalledTimes(2));
+      expect(api.openSource).toHaveBeenLastCalledWith('challenge');
+      expect(api.retryDownload).not.toHaveBeenCalled();
+      $('retry-browser-mode').value = 'auto';
+      $('retry-form').requestSubmit();
+      await vi.waitFor(() =>
+        expect(api.retryDownload).toHaveBeenCalledWith({
+          id: 'challenge',
+          options: { quality: '720', subtitles: false },
+        }),
+      );
+      expect(api.saveSettings).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps technical details closed initially and preserves their open state through queue updates', async () => {
+    const failed = job('challenge', 'failed', {
+      errorCode: 'browser-challenge',
+      error: 'Raw tool error',
+    });
+    const { events } = await boot({ queue: { queue: [], history: [failed] } });
+    const details = document.querySelector('[data-id="challenge"] .error-details');
+    expect(details.open).toBe(false);
+    details.open = true;
+    const summary = details.querySelector('summary');
+    summary.tabIndex = 0;
+    summary.focus();
+    events.onState({ queue: [], history: [{ ...failed, error: 'New raw tool error' }] });
+    expect(document.querySelector('[data-id="challenge"] .error-details')).toBe(details);
+    expect(details.open).toBe(true);
+    expect(document.activeElement).toBe(summary);
+    expect(details.querySelector('pre').textContent).toBe('New raw tool error');
+    document.querySelector('[data-id="challenge"] [data-action="retryOptions"]').click();
+    $('retry-error-details').open = true;
+    $('close-retry').click();
+    document.querySelector('[data-id="challenge"] [data-action="retryOptions"]').click();
+    expect($('retry-error-details').open).toBe(false);
+  });
+
+  it('offers tool repair for missing browser support and sends a selected retry mode', async () => {
+    const { api } = await boot({
+      queue: {
+        queue: [],
+        history: [
+          job('support', 'failed', {
+            errorCode: 'browser-support',
+            error: 'Impersonate target unavailable',
+          }),
+        ],
+      },
+    });
+    const row = document.querySelector('[data-id="support"]');
+    expect(row.querySelector('.hint').textContent).toBe(
+      window.VideoNinjaI18n.t('remedy_BROWSER_SUPPORT'),
+    );
+    expect(row.querySelector('[data-action="openSource"]').hidden).toBe(true);
+    api.toolAction.mockResolvedValue(ok({ tools: goodTools, result: {} }));
+    row.querySelector('.error-area > button').click();
+    await vi.waitFor(() =>
+      expect(api.toolAction).toHaveBeenCalledWith({ tool: 'yt-dlp', action: 'diagnose' }),
+    );
+    row.querySelector('[data-action="retryOptions"]').click();
+    expect($('retry-guidance').textContent).toContain(
+      window.VideoNinjaI18n.t('browserSupportHelp'),
+    );
+    $('retry-browser-mode').value = 'compatible';
+    $('retry-form').requestSubmit();
+    await vi.waitFor(() =>
+      expect(api.retryDownload).toHaveBeenCalledWith({
+        id: 'support',
+        options: { quality: '1080', subtitles: false, browserMode: 'compatible' },
+      }),
+    );
+  });
+
+  it('shows real browser recovery and site cooldown without replaying personality events', async () => {
+    const { events } = await boot({
+      queue: { queue: [job('active', 'downloading')], history: [] },
+    });
+    const t = window.VideoNinjaI18n.t;
+    const row = document.querySelector('[data-id="active"]');
+    events.onProgress({ id: 'active', phase: 'preparing', recovery: { type: 'browser-retry' } });
+    expect(row.querySelector('.download-state').textContent).toContain(t('browserRecoveryRetry'));
+    events.onState({
+      queue: [
+        job('active', 'pending', {
+          phase: 'waiting-site',
+          retryAt: '2026-10-17T12:34:56Z',
+          recovery: { type: 'browser-reused' },
+        }),
+      ],
+      history: [],
+    });
+    const status = row.querySelector('.download-state').textContent;
+    expect(status).toContain(t('waiting-site'));
+    expect(status).toContain(t('browserRecoveryReused'));
+    expect(status).toContain(new Date('2026-10-17T12:34:56Z').toLocaleTimeString('en-GB'));
+    expect(document.querySelectorAll('.personality-toast')).toHaveLength(0);
+    events.onProgress({ id: 'active', recovery: { type: '<img src=x>' } });
+    expect(row.querySelector('.download-state').textContent).not.toContain('<img');
+  });
+
+  it('persists tool maintenance opt-in and channel before an explicit check', async () => {
+    const { api, events } = await boot();
+    expect($('auto-tool-updates').checked).toBe(false);
+    expect($('check-tool-maintenance').disabled).toBe(true);
+    expect($('ytdlp-channel').value).toBe('nightly');
+    expect(api.toolMaintenance).not.toHaveBeenCalled();
+    $('auto-tool-updates').checked = true;
+    $('auto-tool-updates').dispatchEvent(new Event('change'));
+    expect($('check-tool-maintenance').disabled).toBe(false);
+    $('ytdlp-channel').value = 'stable';
+    $('ytdlp-channel').dispatchEvent(new Event('change'));
+    let finish;
+    api.toolMaintenance.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    $('check-tool-maintenance').click();
+    await vi.waitFor(() => expect(api.toolMaintenance).toHaveBeenCalledWith({ action: 'check' }));
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ autoToolUpdates: true, ytdlpChannel: 'stable' }),
+    );
+    expect($('check-tool-maintenance').disabled).toBe(true);
+    finish(
+      ok({
+        maintenance: {
+          status: 'deferred',
+          tools: [
+            {
+              tool: 'yt-dlp',
+              status: 'update-available',
+              installedVersion: 'old',
+              availableVersion: 'new',
+            },
+          ],
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect($('tool-maintenance-status').textContent).toContain(
+        window.VideoNinjaI18n.t('maintenance_deferred'),
+      ),
+    );
+    expect($('tool-maintenance-list').textContent).toContain('old');
+    expect($('tool-maintenance-list').textContent).toContain('new');
+    events.onTools({
+      ...goodTools,
+      maintenance: { status: 'updating', tools: [{ tool: 'yt-dlp', status: 'updating' }] },
+    });
+    expect($('check-tool-maintenance').disabled).toBe(true);
+    expect($('add-downloads').disabled).toBe(true);
+    events.onTools({
+      ...goodTools,
+      maintenance: { status: 'updated', tools: [{ tool: 'yt-dlp', status: 'updated' }] },
+    });
+    expect($('check-tool-maintenance').disabled).toBe(false);
+    expect($('add-downloads').disabled).toBe(false);
+    $('language').value = 'fi';
+    $('language').dispatchEvent(new Event('change'));
+    expect($('tool-maintenance-status').textContent).toBe(
+      window.VideoNinjaI18n.t('maintenance_updated'),
+    );
+    expect($('ytdlp-channel').value).toBe('stable');
+  });
+
+  it('renders maintenance failures as safe expandable details and blocks requests after a failed settings save', async () => {
+    const hostile = '<img src=x onerror=alert(1)>';
+    const { api } = await boot({
+      settings: { language: 'en', downloadPath: '/downloads', autoToolUpdates: true },
+      tools: {
+        ...goodTools,
+        maintenance: {
+          status: 'error',
+          error: hostile,
+          lastCheckedAt: '2026-10-17T10:00:00Z',
+          tools: [{ tool: 'yt-dlp', status: 'needs-review', installedVersion: hostile }],
+        },
+      },
+    });
+    expect($('tool-maintenance-error').hidden).toBe(false);
+    expect($('tool-maintenance-error').open).toBe(false);
+    expect($('tool-maintenance-error-text').textContent).toBe(hostile);
+    expect($('tool-maintenance-settings').querySelector('img')).toBeNull();
+    api.saveSettings.mockResolvedValue({
+      ok: false,
+      error: { code: 'OPERATION_FAILED', message: 'Cannot save' },
+    });
+    $('ytdlp-channel').value = 'stable';
+    $('ytdlp-channel').dispatchEvent(new Event('change'));
+    $('check-tool-maintenance').click();
+    await vi.waitFor(() =>
+      expect($('settings-save-status').textContent).toBe(window.VideoNinjaI18n.t('saveFailed')),
+    );
+    await vi.waitFor(() => expect($('check-tool-maintenance').disabled).toBe(false));
+    expect(api.toolMaintenance).not.toHaveBeenCalled();
+    expect($('notice').classList.contains('is-error')).toBe(true);
+  });
+
+  it('clears remembered website compatibility only after an explicit accepted action', async () => {
+    const { api } = await boot();
+    expect(api.getSiteCompatibility).not.toHaveBeenCalled();
+    expect(api.clearSiteCompatibility).not.toHaveBeenCalled();
+    expect($('clear-site-compatibility').disabled).toBe(true);
+    api.getSiteCompatibility.mockResolvedValue(
+      ok([{ origin: 'https://example.com', expiresAt: '2026-10-18T00:00:00Z' }]),
+    );
+    $('refresh-site-compatibility').click();
+    await vi.waitFor(() => expect($('site-compatibility-status').textContent).toContain('1'));
+    expect($('clear-site-compatibility').disabled).toBe(false);
+    api.clearSiteCompatibility.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'OPERATION_FAILED', message: 'Cannot clear' },
+    });
+    $('clear-site-compatibility').click();
+    await vi.waitFor(() => expect($('notice').classList.contains('is-error')).toBe(true));
+    expect($('site-compatibility-status').textContent).toContain('1');
+    expect($('clear-site-compatibility').disabled).toBe(false);
+    api.clearSiteCompatibility.mockResolvedValueOnce(ok([]));
+    $('clear-site-compatibility').click();
+    await vi.waitFor(() => expect($('site-compatibility-status').textContent).toContain('0'));
+    expect(api.clearSiteCompatibility).toHaveBeenLastCalledWith({});
+    expect($('clear-site-compatibility').disabled).toBe(true);
+    expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.retryDownload).not.toHaveBeenCalled();
   });
 

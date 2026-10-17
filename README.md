@@ -112,6 +112,10 @@ set the maximum number of simultaneous downloads.
 - Private jobs and optional OS-backed encryption of saved settings and activity.
 - Optional grouped desktop notifications and verified completed-file actions.
 - Managed download-tool installation/update, EJS diagnostics and application update checks.
+- One automatic browser-compatibility retry for a recognized browser challenge, with
+  expiring per-site memory and separate guidance for login, cookies and rate limits.
+- Site-specific HTTP 429 cooldowns and temporary single-download limits, leaving
+  other sites available; optional daily updates of already managed download tools.
 
 The queue holds up to 500 jobs and history keeps the latest 100 entries.
 Paused jobs remain paused after restart; interrupted active jobs return to the queue.
@@ -134,7 +138,8 @@ scope, defaults and verification limits.
 ## Download tools
 
 Download tools are separate executables. In 1.2 development, Settings offers
-explicit installation/update and setup instructions; nothing installs silently.
+explicit installation/update and setup instructions. Initial tool installation
+requires your choice; optional automatic maintenance updates already managed tools.
 The released 1.1 app requires manual installation through the links below.
 
 | Tool                                                                    | Purpose                                                    |
@@ -150,13 +155,22 @@ sources and their SHA-256 manifests, then stage and verify executables before
 replacing the previous managed version. Tools installed by another method remain
 under that method's control.
 
-Choose **Stable** or **Nightly** in the yt-dlp card before updating. Upstream
+Choose **Stable** or **Nightly** in the yt-dlp card before updating. The selection
+is remembered; new profiles default to Nightly. Upstream
 recommends Nightly for current site fixes. VideoNinja warns when the detected
 yt-dlp build is more than 90 days old. Updating the app itself does not update
 an old globally installed yt-dlp: install/update the managed engine in Settings.
 Manually paused jobs can stay in the queue during a tool update; wait until their
 download processes have stopped. See the [service guide](docs/USER_GUIDE.md) for
 Instagram access errors, browser cookies and YouTube requirements.
+
+Enable **Automatic tool updates** in Settings for a daily check while VideoNinja
+is open. Maintenance waits until the queue is empty or manually paused and previews
+have stopped, verifies downloads and restores the prior tool if staging fails.
+It never adopts globally installed tools or silently downgrades a newer version.
+Browser compatibility uses yt-dlp's supported impersonation dependency when
+available. It does not solve interactive CAPTCHA challenges or choose account
+cookies for you; use **Open source** and the access controls when those are needed.
 
 Managed tools under the app's user-data folder take discovery priority, followed
 by executable/PATH and common installation locations. Settings shows detected

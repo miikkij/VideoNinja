@@ -736,6 +736,16 @@ dialog::backdrop {
   margin-inline-end: 0.5rem;
   margin-top: 0.3rem;
 }
+.error-details {
+  margin-top: 0.8rem;
+}
+#tool-maintenance-list {
+  padding-inline-start: 1.5rem;
+  overflow-wrap: anywhere;
+}
+#tool-maintenance-list li + li {
+  margin-top: 0.4rem;
+}
 .playlist-pagination {
   justify-content: space-between;
   margin-top: 0.75rem;

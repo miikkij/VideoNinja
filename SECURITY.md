@@ -103,8 +103,19 @@ revision when possible. It exposes unknown or incompatible results rather than
 claiming success from a version probe. It does not solve a live YouTube challenge.
 See the [official EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
 
-Downloads/previews contact source services through yt-dlp. Tool installation and
-EJS compatibility lookup contact upstream GitHub services. Application startup
+Downloads/previews contact source services through yt-dlp. Browser compatibility
+can retry one recognized browser challenge with yt-dlp's generic impersonation
+support. It does not select cookies or solve interactive CAPTCHA challenges.
+Successful compatibility retains only an origin, tool version and expiry for up
+to seven days; private operations bypass this memory. Settings can clear it, and
+optional profile encryption covers it alongside saved activity. Rate-limit
+cooldowns also retain bounded origins and deadlines, with private-origin limits
+kept in memory only.
+
+Tool installation, optional daily maintenance and EJS compatibility lookup
+contact upstream GitHub services. Maintenance is off by default and only updates
+tools previously installed by VideoNinja while downloads are idle or manually
+paused. Application startup
 update checks contact GitHub by default and can be disabled; app download/install
 requires separate actions. There is no application cloud account or remote history
 store. Download only content you are authorized to save.

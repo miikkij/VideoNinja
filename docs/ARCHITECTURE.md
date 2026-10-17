@@ -14,7 +14,9 @@ flowchart LR
     ADAPTER --> RUNNER[Shell-free process runner]
     RUNNER --> TOOLS[yt-dlp / ffmpeg / ffprobe / runtime]
     MAIN --> STORE[Validated storage and optional OS encryption]
-    MAIN --> MANAGER[Explicit tool manager]
+    MAIN --> MAINTENANCE[Optional daily tool maintenance]
+    MAINTENANCE --> MANAGER[Verified tool manager]
+    MAIN --> MANAGER
     MAIN --> UPDATER[Application update service]
 ```
 
@@ -34,6 +36,8 @@ and new windows are denied. Untrusted titles/errors enter the DOM as text.
 | `src/main/persistence.js`                      | Settings/state migration, recovery and durable checkpoints.                                                 |
 | `src/main/privateStore.js`, `storageLimits.js` | Atomic settings/activity storage, OS encryption and common read/write limits.                               |
 | `src/main/tools.js`, `toolManager.js`          | Discovery, probes, EJS diagnosis, verified managed installs and guided setup.                               |
+| `src/main/toolMaintenance.js`                 | Opt-in daily maintenance, persisted attempt times and shared idle admission.                                |
+| `src/main/siteCompatibility.js`, `siteLimits.js` | Expiring successful origin preferences and bounded per-origin rate-limit state.                           |
 | `src/main/processRunner.js`                    | Bounded UTF-8 output, process-tree cancellation and shell-free execution.                                   |
 | `src/main/ytdlp.js`                            | Arguments, projected metadata, paging, final-path/integrity checks and disk measurement.                    |
 | `src/main/appUpdater.js`, `notifications.js`   | Explicit application updates and opt-in grouped notifications.                                              |
@@ -68,7 +72,7 @@ deduplicates before one durable mutation. History holds at most 100 terminal job
 
 `pending`, `downloading` and `paused` are live states; `completed`, `failed`,
 `cancelled` and archive-derived `skipped` are terminal states. Pending phases
-include waiting for retry, disk, schedule or a duplicate source. Every active job
+include waiting for retry, a limited site, disk, schedule or a duplicate source. Every active job
 has its own controller. Slots and URL/output reservations remain held until the
 process promise settles, including cancellation/pause. Pending jobs can reorder.
 `queue-updated` drives persistence; `download-progress` does not write the store.
@@ -96,6 +100,13 @@ backoff is capped at 15 minutes. Authentication, format and permanent source
 failures need intervention. A watchdog watches real percentage/byte advancement
 or phase changes, not repeated heartbeat messages. Defaults are 180 seconds for
 downloading and 900 seconds for processing. Abort settlement precedes retry.
+
+A classified rate limit also delays pending work for that exact HTTP(S) origin.
+The first cooldown is at least 30 seconds, repeated failures back off to at most
+15 minutes, and the origin admits one job at a time for 15 minutes after its
+cooldown. Existing transfers are allowed to settle; other origins can fill free
+slots. At most 100 bounded origin records survive restart. Private-job limits
+are held in memory only, and no media path, URL query or credential is retained.
 
 Optional local-time schedule windows include overnight ranges. At closing time,
 active jobs pause with their partials; only schedule-paused jobs resume next
@@ -125,6 +136,26 @@ captions, supported cookies/runtime/network settings and numeric KiB/s limits.
 Extra arguments use a small allowlist. User configs, plugins, arbitrary commands
 and automatic remote-component fetching are disabled; processes use `shell:false`.
 Metadata/progress/error output is bounded and errors redacted.
+
+Browser compatibility is `auto` (also the absent-field default), `off` or
+`compatible`. An explicit Cloudflare challenge can spend one fallback attempt
+with the fixed `--extractor-args generic:impersonate` option. A WeakMap keyed by
+the job's AbortSignal shares the selected mode across metadata, exact-format
+validation and download. The adapter checks yt-dlp's bounded, cached
+`--list-impersonate-targets` probe before retrying. Successful compatibility is
+remembered per exact origin and yt-dlp version for seven days, capped at 100
+origins. Private operations neither read nor write that preference. The store
+encrypts it with activity when OS-backed encryption is enabled. Clearing the
+memory is an explicit IPC action; login cookies are never selected automatically.
+
+Daily tool maintenance is opt-in and runs only while the app is open. It shares
+the manual tool admission lock through checking, staging, rollback and final
+probes, allowing only an empty queue or manually paused jobs with no active
+children/previews. A busy app defers the attempt; persisted attempt times prevent
+restart-driven update loops. Only valid, already managed installations are
+eligible. The selected Stable/Nightly channel is remembered, equal versions are
+skipped and automatic downgrade is refused. Cancellation waits for installation
+cleanup before releasing scheduling or quitting.
 
 Output names include bounded title/extractor/source ID, a quality/audio or exact
 format profile and 16 hex characters of a SHA-256 normalized-URL hash. Different

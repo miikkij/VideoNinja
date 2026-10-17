@@ -25,6 +25,8 @@ const { createNotifications } = require('./notifications');
 const { createPersonalityEvents } = require('./personalityEvents');
 const { createAppUpdater } = require('./appUpdater');
 const { createToolManager } = require('./toolManager');
+const { createToolMaintenance } = require('./toolMaintenance');
+const { createSiteCompatibility } = require('./siteCompatibility');
 const {
   readConfiguration,
   loadPersistedState,
@@ -75,6 +77,8 @@ let startup;
 let persistence;
 let services;
 let toolManager;
+let toolMaintenance;
+let siteCompatibility;
 let appUpdater;
 let notifications;
 let personalityEvents;
@@ -116,7 +120,12 @@ async function recheckTools() {
     const failure = results.find((result) => result.status === 'rejected');
     if (failure) throw failure.reason;
     const [ytdlp, ffmpeg] = results.map((result) => result.value);
-    toolState = { ytdlp, ffmpeg, setup: toolManager?.getSetupPlan() };
+    toolState = {
+      ytdlp,
+      ffmpeg,
+      setup: toolManager?.getSetupPlan(),
+      maintenance: toolMaintenance?.getState(),
+    };
     send('tools', toolState);
     return toolState;
   })();
@@ -265,6 +274,7 @@ async function initialize() {
   store = createPrivateStore(new Store({ clearInvalidConfig: false }), safeStorage);
   const state = loadPersistedState(store);
   settings = state.settings;
+  const savedChannel = store.get('settings')?.ytdlpChannel;
   warnings = [...restored.warnings, ...state.warnings];
   store.set('schemaVersion', 1);
   store.set('settings', settings);
@@ -275,7 +285,33 @@ async function initialize() {
     configuredToolsDir || path.join(app.getPath('userData'), 'tools'),
   );
   process.env.VIDEONINJA_TOOLS_DIR = managedDir;
+  if (!savedChannel) {
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(managedDir, 'yt-dlp', 'managed.json'), 'utf8'),
+      );
+      const source = new URL(manifest.source);
+      if (
+        source.origin === 'https://github.com' &&
+        source.pathname.startsWith('/yt-dlp/yt-dlp/releases/')
+      )
+        settings.ytdlpChannel = 'stable';
+      else if (
+        source.origin === 'https://github.com' &&
+        source.pathname.startsWith('/yt-dlp/yt-dlp-nightly-builds/releases/')
+      )
+        settings.ytdlpChannel = 'nightly';
+      store.set('settings', settings);
+    } catch {
+      /* New profiles retain the recommended Nightly default. */
+    }
+  }
   toolManager = createToolManager({ managedDir });
+  siteCompatibility = createSiteCompatibility({
+    load: () => store.get('siteCompatibility'),
+    save: (value) => store.set('siteCompatibility', value),
+  });
+  Object.assign(tools, tools.createDownloader({ siteCompatibility }));
   queue = new DownloadQueue({
     prepareDownload: (...args) => tools.fetchMetadata(...args),
     getDiskSpace: (...args) => tools.getDiskSpace(...args),
@@ -332,6 +368,8 @@ async function initialize() {
     tools,
     startup,
     toolManager,
+    siteCompatibility,
+    getToolMaintenance: () => toolMaintenance,
     appUpdater,
     privacyStatus: () => store.status(),
     hasToolCheck: () => Boolean(toolCheck),
@@ -341,6 +379,7 @@ async function initialize() {
       if (quitting || installingUpdate) throw new Error('The application is restarting.');
       store.set('settings', value);
       settings = value;
+      toolMaintenance?.settingsChanged();
       queue.setConcurrency(settings.maxConcurrent, { start: false });
       queue.configure(settings);
       updateTray();
@@ -359,13 +398,24 @@ async function initialize() {
         version: app.getVersion(),
         settings,
         queue: queue.getQueueState(),
-        tools: currentTools,
+        tools: { ...currentTools, maintenance: toolMaintenance?.getState() },
         diskSpace: diskState,
         startupEnabled,
         warnings,
         privacy: store.status(),
         appUpdate: updateState,
       };
+    },
+  });
+  toolMaintenance = createToolMaintenance({
+    getSettings: () => settings,
+    manager: toolManager,
+    runExclusive: (operation, options) => services.runToolOperation(operation, options),
+    loadState: () => store.get('toolMaintenance'),
+    saveState: (value) => store.set('toolMaintenance', value),
+    onState: (maintenance) => {
+      toolState = { ...toolState, maintenance };
+      send('tools', toolState);
     },
   });
   registerIpc(ipcMain, () => mainWindow, services.handlers);
@@ -394,12 +444,16 @@ async function initialize() {
   queue.setConcurrency(settings.maxConcurrent, { start: false });
   queue.configure(settings, { start: false });
   queue.processNext();
-  void recheckTools().catch(() => {
-    if (quitting) return;
-    warn('TOOL_CHECK_FAILED');
-    toolState = { ytdlp: { available: false, jsRuntimes: [] }, ffmpeg: { available: false } };
-    send('tools', toolState);
-  });
+  void recheckTools()
+    .catch(() => {
+      if (quitting) return;
+      warn('TOOL_CHECK_FAILED');
+      toolState = { ytdlp: { available: false, jsRuntimes: [] }, ffmpeg: { available: false } };
+      send('tools', toolState);
+    })
+    .finally(() => {
+      if (!quitting) toolMaintenance.start();
+    });
   void checkDisk();
   diskTimer = setInterval(() => {
     void checkDisk();
@@ -435,6 +489,7 @@ if (!app.requestSingleInstanceLock()) {
     notifications?.dispose();
     personalityEvents?.dispose();
     const stoppingUpdater = appUpdater?.dispose();
+    const stoppingMaintenance = toolMaintenance?.dispose();
     const pendingToolCheck = toolCheck;
     toolController?.abort();
     Promise.all([
@@ -442,6 +497,7 @@ if (!app.requestSingleInstanceLock()) {
       queue.shutdown(),
       pendingToolCheck?.catch(() => {}),
       stoppingUpdater,
+      stoppingMaintenance,
     ])
       .then(() => persistence.checkpoint())
       .catch(() => {

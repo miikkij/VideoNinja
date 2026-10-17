@@ -9,6 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import ytdlp from '../src/main/ytdlp.js';
 import toolService from '../src/main/tools.js';
+import processRunner from '../src/main/processRunner.js';
+import siteModule from '../src/main/siteCompatibility.js';
+import downloadErrors from '../src/main/downloadErrors.js';
 
 // Explicit integration check: generate owned fixtures, use loopback only, and
 // never alter a user's profile, media collection, or installed tool versions.
@@ -140,10 +143,31 @@ try {
     (await readdir(source)).map((name) => [`/${name}`, path.join(source, name)]),
   );
   const requests = [];
+  let browserRequests = 0;
+  const browserCookies = [];
   server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://127.0.0.1');
       requests.push({ path: url.pathname, method: request.method });
+      if (url.pathname === '/browser.html' && ['GET', 'HEAD'].includes(request.method)) {
+        browserCookies.push(request.headers.cookie || null);
+        browserRequests++;
+        if (browserRequests === 1) {
+          response.writeHead(403, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'cf-mitigated': 'challenge',
+            Server: 'cloudflare',
+          });
+          response.end('<html><title>Just a moment...</title>Cloudflare anti-bot challenge</html>');
+        } else {
+          response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          response.end(
+            '<html><head><title>Owned browser fixture</title></head><body>' +
+              '<video controls src="/fixture.mp4?alias=browser-fixture"></video></body></html>',
+          );
+        }
+        return;
+      }
       if (url.pathname === '/playlist.html' && ['GET', 'HEAD'].includes(request.method)) {
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         response.end(
@@ -356,6 +380,81 @@ try {
   assert.equal(path.extname(audioConverted.filepath), '.mp3');
   assert.deepEqual(await streamTypes(audioConverted.filepath), ['audio']);
 
+  const savedSites = [];
+  const compatibility = siteModule.createSiteCompatibility({
+    save: (entries) => savedSites.push(entries),
+  });
+  const browserRuns = [];
+  const browserDownloader = ytdlp.createDownloader({
+    siteCompatibility: compatibility,
+    runProcess: (file, args, handlers) => {
+      if (args.includes(`${base}/browser.html`)) browserRuns.push(args);
+      return processRunner.runProcess(file, args, handlers);
+    },
+  });
+  const browserEvents = [];
+  const browserControl = {
+    signal: controller.signal,
+    onRecovery: (event) => browserEvents.push(event),
+  };
+  let browserCheck;
+  if (yt.impersonation?.available) {
+    const preview = await browserDownloader.fetchMetadata(
+      `${base}/browser.html`,
+      {},
+      browserControl,
+    );
+    assert(preview.title, 'The retried real metadata request must return a title.');
+    const result = await browserDownloader.downloadVideo(
+      `${base}/browser.html`,
+      output,
+      {},
+      null,
+      browserControl,
+    );
+    assert.equal(result.success, true, result.error);
+    assert.equal(result.integrity?.status, 'verified');
+    assert.equal(await hashFile(result.filepath), originalHash);
+    assert.deepEqual(browserEvents, [{ type: 'browser-retry' }]);
+    assert.equal(
+      browserRuns.length,
+      3,
+      'Metadata fallback and actual download share exactly one retry.',
+    );
+    assert(!browserRuns[0].includes('generic:impersonate'));
+    assert(browserRuns.slice(1).every((args) => args.includes('generic:impersonate')));
+    assert(
+      browserRuns.every(
+        (args) =>
+          !args.includes('--impersonate') &&
+          !args.includes('--cookies') &&
+          !args.includes('--cookies-from-browser'),
+      ),
+    );
+    assert(savedSites.length > 0);
+    assert.deepEqual(
+      compatibility.list().map((entry) => entry.origin),
+      [base],
+    );
+    await browserDownloader.fetchMetadata(`${base}/browser.html?remembered=1`, {}, browserControl);
+    assert.deepEqual(browserEvents, [{ type: 'browser-retry' }, { type: 'browser-reused' }]);
+    browserCheck = 'browser-challenge-retry-download-and-origin-reuse';
+  } else {
+    await assert.rejects(
+      browserDownloader.fetchMetadata(`${base}/browser.html`, {}, browserControl),
+      (error) => downloadErrors.classifyDownloadError(error).code === 'browser-support',
+      'Missing optional impersonation support must have an actionable diagnosis.',
+    );
+    assert.equal(browserRuns.length, 1);
+    assert.deepEqual(browserEvents, []);
+    assert.deepEqual(compatibility.list(), []);
+    browserCheck = 'browser-challenge-without-optional-support';
+  }
+  assert(
+    browserCookies.length > 0 && browserCookies.every((cookie) => cookie === null),
+    'Browser recovery must not silently introduce authentication cookies.',
+  );
+
   console.log(
     JSON.stringify(
       {
@@ -373,6 +472,7 @@ try {
           'original-audio',
           'mp3-conversion',
           'unicode-space-percent-folder',
+          browserCheck,
         ],
         tools: { ytdlp: yt.version, ffmpeg: ffmpeg.version },
         network: '127.0.0.1 only',

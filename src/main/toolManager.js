@@ -284,7 +284,182 @@ function createToolManager(deps = {}) {
     return found;
   }
 
-  async function install(tool, { signal, channel = 'stable' } = {}) {
+  async function managedInstallation(tool) {
+    try {
+      const directory = path.join(managedDir, tool);
+      const stat = await fileSystem.lstat(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+      const manifestPath = path.join(directory, 'managed.json');
+      const manifestStat = await fileSystem.lstat(manifestPath);
+      if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.size > 65536)
+        return null;
+      const manifest = JSON.parse(await fileSystem.readFile(manifestPath, 'utf8'));
+      const repositories = [REPOSITORIES[tool]];
+      if (tool === 'yt-dlp') repositories.push('yt-dlp/yt-dlp-nightly-builds');
+      if (
+        manifest.tool !== tool ||
+        typeof manifest.version !== 'string' ||
+        !/^[\w.-]{1,80}$/u.test(manifest.version) ||
+        !/^[a-f0-9]{64}$/iu.test(manifest.sha256) ||
+        !repositories.some((repository) =>
+          manifest.source?.startsWith(
+            `https://github.com/${repository}/releases/download/${manifest.version}/`,
+          ),
+        )
+      )
+        return null;
+      const names =
+        tool === 'runtime' ? ['deno'] : tool === 'ffmpeg' ? ['ffmpeg', 'ffprobe'] : ['yt-dlp'];
+      for (const name of names) {
+        const binary = await fileSystem.lstat(
+          path.join(directory, `${name}${platform === 'win32' ? '.exe' : ''}`),
+        );
+        if (!binary.isFile() || binary.isSymbolicLink() || !binary.size) return null;
+      }
+      return manifest;
+    } catch (error) {
+      if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
+      throw error;
+    }
+  }
+
+  function updateStatus(tool, installed, release, checksum) {
+    if (!installed) return 'unmanaged';
+    if (installed.version === release.tag_name && installed.sha256.toLowerCase() === checksum)
+      return 'current';
+    // FFmpeg uses a moving "latest" tag; its official checksum identifies the build.
+    if (tool === 'ffmpeg') return 'update-available';
+    const pattern =
+      tool === 'runtime'
+        ? /^v?(\d+)\.(\d+)\.(\d+)$/u
+        : /^(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d{6}))?$/u;
+    const previous = pattern.exec(installed.version);
+    const candidate = pattern.exec(release.tag_name);
+    if (!previous || !candidate) return 'needs-review';
+    for (let index = 1; index < Math.max(previous.length, candidate.length); index++) {
+      const difference = Number(candidate[index] || 0) - Number(previous[index] || 0);
+      if (difference) return difference > 0 ? 'update-available' : 'needs-review';
+    }
+    // Replaced bytes under an identical fixed version need an explicit manual update.
+    return 'needs-review';
+  }
+
+  async function resolveRelease(tool, channel, signal) {
+    const repository =
+      tool === 'yt-dlp' && channel === 'nightly'
+        ? 'yt-dlp/yt-dlp-nightly-builds'
+        : REPOSITORIES[tool];
+    const release = JSON.parse(
+      (
+        await read(
+          `https://api.github.com/repos/${repository}/releases/latest`,
+          2 * 1024 * 1024,
+          signal,
+        )
+      ).toString('utf8'),
+    );
+    if (
+      !release ||
+      typeof release.tag_name !== 'string' ||
+      !/^[\w.-]{1,80}$/u.test(release.tag_name) ||
+      !Array.isArray(release.assets)
+    )
+      throw new Error('Invalid official tool release metadata.');
+    let assetName, checksumName, executableNames;
+    const extension = platform === 'win32' ? '.exe' : '';
+    if (tool === 'yt-dlp') {
+      assetName =
+        platform === 'win32'
+          ? arch === 'arm64'
+            ? 'yt-dlp_arm64.exe'
+            : 'yt-dlp.exe'
+          : platform === 'darwin'
+            ? 'yt-dlp_macos'
+            : arch === 'arm64'
+              ? 'yt-dlp_linux_aarch64'
+              : 'yt-dlp_linux';
+      checksumName = 'SHA2-256SUMS';
+      executableNames = [`yt-dlp${extension}`];
+    } else if (tool === 'runtime') {
+      const target = {
+        win32: 'pc-windows-msvc',
+        darwin: 'apple-darwin',
+        linux: 'unknown-linux-gnu',
+      }[platform];
+      assetName = `deno-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-${target}.zip`;
+      checksumName = `${assetName}.sha256sum`;
+      executableNames = [`deno${extension}`];
+    } else {
+      const target =
+        platform === 'win32'
+          ? arch === 'arm64'
+            ? 'winarm64'
+            : 'win64'
+          : arch === 'arm64'
+            ? 'linuxarm64'
+            : 'linux64';
+      assetName = `ffmpeg-master-latest-${target}-gpl.${platform === 'win32' ? 'zip' : 'tar.xz'}`;
+      checksumName = 'checksums.sha256';
+      executableNames = [`ffmpeg${extension}`, `ffprobe${extension}`];
+    }
+    const assetUrl = (name) => {
+      const matches = release.assets.filter((asset) => asset.name === name);
+      const expected = `https://github.com/${repository}/releases/download/${release.tag_name}/${name}`;
+      if (matches.length !== 1 || matches[0].browser_download_url !== expected)
+        throw new Error('The official release is missing the expected platform asset.');
+      return expected;
+    };
+    const checksum = checksumFor(
+      (await read(assetUrl(checksumName), 1024 * 1024, signal)).toString('utf8'),
+      assetName,
+    );
+    return { release, assetName, executableNames, assetUrl, checksum };
+  }
+
+  async function checkUpdates({ channel = 'stable', signal } = {}) {
+    if (!['stable', 'nightly'].includes(channel))
+      throw new Error('Unsupported yt-dlp release channel.');
+    if (installing) throw new Error('Another tool installation is in progress.');
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const timer = setTimeout(abort, 60000);
+    try {
+      const tools = [];
+      for (const plan of getSetupPlan().tools) {
+        if (controller.signal.aborted) throw abortError();
+        try {
+          const installed = plan.managed ? await managedInstallation(plan.tool) : null;
+          if (!installed) {
+            tools.push({ tool: plan.tool, status: 'unmanaged' });
+            continue;
+          }
+          const { release, checksum } = await resolveRelease(plan.tool, channel, controller.signal);
+          tools.push({
+            tool: plan.tool,
+            status: updateStatus(plan.tool, installed, release, checksum),
+            installedVersion: installed.version,
+            availableVersion: release.tag_name,
+            ...(plan.tool === 'yt-dlp' ? { channel } : {}),
+          });
+        } catch (error) {
+          if (controller.signal.aborted || error.name === 'AbortError') throw abortError();
+          tools.push({
+            tool: plan.tool,
+            status: 'error',
+            reason: 'The managed tool update could not be checked.',
+          });
+        }
+      }
+      return { tools };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
+  async function install(tool, { signal, channel = 'stable', updateOnly = false } = {}) {
     if (!Object.hasOwn(REPOSITORIES, tool)) throw new Error('Unsupported managed tool.');
     if (!['stable', 'nightly'].includes(channel))
       throw new Error('Unsupported yt-dlp release channel.');
@@ -308,74 +483,18 @@ function createToolManager(deps = {}) {
       switched = false;
     try {
       const activeSignal = controller.signal;
-      const repository =
-        tool === 'yt-dlp' && channel === 'nightly'
-          ? 'yt-dlp/yt-dlp-nightly-builds'
-          : REPOSITORIES[tool];
-      const release = JSON.parse(
-        (
-          await read(
-            `https://api.github.com/repos/${repository}/releases/latest`,
-            2 * 1024 * 1024,
-            activeSignal,
-          )
-        ).toString('utf8'),
+      const installed = updateOnly ? await managedInstallation(tool) : null;
+      if (updateOnly && !installed) return { status: 'unmanaged', tool };
+      const { release, assetName, executableNames, assetUrl, checksum } = await resolveRelease(
+        tool,
+        channel,
+        activeSignal,
       );
-      if (
-        !release ||
-        typeof release.tag_name !== 'string' ||
-        !/^[\w.-]{1,80}$/u.test(release.tag_name) ||
-        !Array.isArray(release.assets)
-      )
-        throw new Error('Invalid official tool release metadata.');
-      let assetName, checksumName, executableNames;
-      const extension = platform === 'win32' ? '.exe' : '';
-      if (tool === 'yt-dlp') {
-        assetName =
-          platform === 'win32'
-            ? arch === 'arm64'
-              ? 'yt-dlp_arm64.exe'
-              : 'yt-dlp.exe'
-            : platform === 'darwin'
-              ? 'yt-dlp_macos'
-              : arch === 'arm64'
-                ? 'yt-dlp_linux_aarch64'
-                : 'yt-dlp_linux';
-        checksumName = 'SHA2-256SUMS';
-        executableNames = [`yt-dlp${extension}`];
-      } else if (tool === 'runtime') {
-        const target = {
-          win32: 'pc-windows-msvc',
-          darwin: 'apple-darwin',
-          linux: 'unknown-linux-gnu',
-        }[platform];
-        assetName = `deno-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-${target}.zip`;
-        checksumName = `${assetName}.sha256sum`;
-        executableNames = [`deno${extension}`];
-      } else {
-        const target =
-          platform === 'win32'
-            ? arch === 'arm64'
-              ? 'winarm64'
-              : 'win64'
-            : arch === 'arm64'
-              ? 'linuxarm64'
-              : 'linux64';
-        assetName = `ffmpeg-master-latest-${target}-gpl.${platform === 'win32' ? 'zip' : 'tar.xz'}`;
-        checksumName = 'checksums.sha256';
-        executableNames = [`ffmpeg${extension}`, `ffprobe${extension}`];
+      if (updateOnly) {
+        const status = updateStatus(tool, installed, release, checksum);
+        if (status !== 'update-available')
+          return { status, tool, version: installed.version, availableVersion: release.tag_name };
       }
-      const assetUrl = (name) => {
-        const matches = release.assets.filter((asset) => asset.name === name);
-        const expected = `https://github.com/${repository}/releases/download/${release.tag_name}/${name}`;
-        if (matches.length !== 1 || matches[0].browser_download_url !== expected)
-          throw new Error('The official release is missing the expected platform asset.');
-        return expected;
-      };
-      const checksum = checksumFor(
-        (await read(assetUrl(checksumName), 1024 * 1024, activeSignal)).toString('utf8'),
-        assetName,
-      );
       const bytes = await read(assetUrl(assetName), MAX_DOWNLOAD, activeSignal);
       if (createHash('sha256').update(bytes).digest('hex') !== checksum)
         throw new Error(
@@ -422,6 +541,7 @@ function createToolManager(deps = {}) {
         JSON.stringify({
           tool,
           version: release.tag_name,
+          ...(tool === 'yt-dlp' ? { channel } : {}),
           source: assetUrl(assetName),
           sha256: checksum,
           license: plan.license,
@@ -527,7 +647,13 @@ function createToolManager(deps = {}) {
     }
   }
 
-  return { install, installYtDlp: (options) => install('yt-dlp', options), diagnose, getSetupPlan };
+  return {
+    install,
+    installYtDlp: (options) => install('yt-dlp', options),
+    checkUpdates,
+    diagnose,
+    getSetupPlan,
+  };
 }
 
 module.exports = { createToolManager, checksumFor, readZipExecutables };

@@ -119,6 +119,200 @@ async function setup({
 }
 
 describe('managed tool installation', () => {
+  it('does not fetch or install missing managed tools during automatic maintenance', async () => {
+    const fixture = await setup();
+    expect(await fixture.manager.checkUpdates({ channel: 'nightly' })).toEqual({
+      tools: [
+        { tool: 'yt-dlp', status: 'unmanaged' },
+        { tool: 'runtime', status: 'unmanaged' },
+        { tool: 'ffmpeg', status: 'unmanaged' },
+      ],
+    });
+    expect(await fixture.manager.install('yt-dlp', { updateOnly: true })).toEqual({
+      tool: 'yt-dlp',
+      status: 'unmanaged',
+    });
+    expect(fixture.request).not.toHaveBeenCalled();
+    expect(fixture.execute).not.toHaveBeenCalled();
+    await expect(fs.stat(fixture.managedDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('checks metadata and checksums without downloading or reinstalling a current executable', async () => {
+    const fixture = await setup();
+    await fixture.manager.install('yt-dlp');
+    fixture.request.mockClear();
+    fixture.execute.mockClear();
+    expect((await fixture.manager.checkUpdates()).tools[0]).toMatchObject({
+      status: 'current',
+      installedVersion: '2026.10.14',
+    });
+    expect(await fixture.manager.install('yt-dlp', { updateOnly: true })).toMatchObject({
+      status: 'current',
+    });
+    expect(
+      fixture.request.mock.calls.some(([url]) => url === fixture.base + fixture.filename),
+    ).toBe(false);
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+  it('uses numeric Deno versions and detects a newer managed release', async () => {
+    const fixture = await setup({ tool: 'runtime', bytes: zip([['deno.exe', 'deno executable']]) });
+    await fixture.manager.install('runtime');
+    const file = path.join(fixture.managedDir, 'runtime', 'managed.json');
+    const manifest = JSON.parse(await fs.readFile(file, 'utf8'));
+    manifest.version = 'v2.9.6';
+    manifest.source = manifest.source.replace('/v2.9.7/', '/v2.9.6/');
+    await fs.writeFile(file, JSON.stringify(manifest));
+    expect((await fixture.manager.checkUpdates()).tools[1]).toMatchObject({
+      status: 'update-available',
+      installedVersion: 'v2.9.6',
+      availableVersion: 'v2.9.7',
+    });
+    expect(await fixture.manager.install('runtime', { updateOnly: true })).toMatchObject({
+      status: 'installed',
+      version: 'v2.9.7',
+    });
+  });
+  it('does not automatically downgrade a newer nightly when Stable is selected', async () => {
+    const fixture = await setup();
+    await fixture.manager.install('yt-dlp');
+    const file = path.join(fixture.managedDir, 'yt-dlp', 'managed.json');
+    const manifest = JSON.parse(await fs.readFile(file, 'utf8'));
+    manifest.version = '2026.10.15.232848';
+    manifest.source =
+      'https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/download/2026.10.15.232848/yt-dlp.exe';
+    await fs.writeFile(file, JSON.stringify(manifest));
+    fixture.execute.mockClear();
+    expect((await fixture.manager.checkUpdates({ channel: 'stable' })).tools[0].status).toBe(
+      'needs-review',
+    );
+    expect(
+      await fixture.manager.install('yt-dlp', { channel: 'stable', updateOnly: true }),
+    ).toMatchObject({ status: 'needs-review' });
+    expect(fixture.execute).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).version).toBe(manifest.version);
+    // Explicit manual selection retains the existing ability to return to Stable.
+    expect(await fixture.manager.install('yt-dlp', { channel: 'stable' })).toMatchObject({
+      status: 'installed',
+      version: '2026.10.14',
+    });
+  });
+  it('checks and updates the explicitly selected official Nightly channel', async () => {
+    const fixture = await setup();
+    await fixture.manager.install('yt-dlp');
+    const repository = 'yt-dlp/yt-dlp-nightly-builds';
+    const version = '2026.10.15.232848';
+    const base = `https://github.com/${repository}/releases/download/${version}/`;
+    fixture.responses.set(
+      `https://api.github.com/repos/${repository}/releases/latest`,
+      JSON.stringify({
+        tag_name: version,
+        assets: [fixture.filename, 'SHA2-256SUMS'].map((name) => ({
+          name,
+          browser_download_url: base + name,
+        })),
+      }),
+    );
+    fixture.responses.set(base + 'SHA2-256SUMS', `${fixture.hash}  ${fixture.filename}\n`);
+    fixture.responses.set(base + fixture.filename, Buffer.from('verified executable'));
+    expect((await fixture.manager.checkUpdates({ channel: 'nightly' })).tools[0]).toMatchObject({
+      status: 'update-available',
+      channel: 'nightly',
+      availableVersion: version,
+    });
+    await fixture.manager.install('yt-dlp', { channel: 'nightly', updateOnly: true });
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(fixture.managedDir, 'yt-dlp', 'managed.json'), 'utf8'),
+      ),
+    ).toMatchObject({ channel: 'nightly', version, source: base + fixture.filename });
+  });
+  it('requires manual review for replaced bytes under the same fixed yt-dlp version', async () => {
+    const fixture = await setup();
+    await fixture.manager.install('yt-dlp');
+    fixture.responses.set(
+      fixture.base + 'SHA2-256SUMS',
+      `${'1'.repeat(64)}  ${fixture.filename}\n`,
+    );
+    expect((await fixture.manager.checkUpdates()).tools[0].status).toBe('needs-review');
+  });
+  it('detects moving FFmpeg builds by checksum and rolls back an automatic failed replacement', async () => {
+    let failSwitch = false;
+    const fixture = await setup({
+      tool: 'ffmpeg',
+      bytes: zip([
+        ['ffmpeg.exe', 'old ffmpeg'],
+        ['ffprobe.exe', 'old ffprobe'],
+      ]),
+      fsOverride: {
+        rename: async (from, to) => {
+          if (failSwitch && path.basename(from) === 'ready')
+            throw Object.assign(new Error('failure'), { code: 'EIO' });
+          return fs.rename(from, to);
+        },
+      },
+    });
+    await fixture.manager.install('ffmpeg');
+    const bytes = zip([
+      ['ffmpeg.exe', 'new ffmpeg'],
+      ['ffprobe.exe', 'new ffprobe'],
+    ]);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    fixture.responses.set(fixture.base + fixture.filename, bytes);
+    fixture.responses.set(fixture.base + 'checksums.sha256', `${hash}  ${fixture.filename}\n`);
+    expect((await fixture.manager.checkUpdates()).tools[2]).toMatchObject({
+      status: 'update-available',
+      installedVersion: 'latest',
+      availableVersion: 'latest',
+    });
+    failSwitch = true;
+    await expect(fixture.manager.install('ffmpeg', { updateOnly: true })).rejects.toThrow(
+      'failure',
+    );
+    expect(await fs.readFile(path.join(fixture.managedDir, 'ffmpeg', 'ffmpeg.exe'), 'utf8')).toBe(
+      'old ffmpeg',
+    );
+    expect(
+      JSON.parse(await fs.readFile(path.join(fixture.managedDir, 'ffmpeg', 'managed.json'), 'utf8'))
+        .sha256,
+    ).toBe(fixture.hash);
+    expect(await fs.readdir(fixture.managedDir)).toEqual(['ffmpeg']);
+  });
+  it('reports per-tool check failures without discarding successful checks', async () => {
+    const fixture = await setup();
+    await fixture.manager.install('yt-dlp');
+    const runtimeDir = path.join(fixture.managedDir, 'runtime');
+    await fs.mkdir(runtimeDir);
+    await fs.writeFile(path.join(runtimeDir, 'deno.exe'), 'managed deno');
+    await fs.writeFile(
+      path.join(runtimeDir, 'managed.json'),
+      JSON.stringify({
+        tool: 'runtime',
+        version: 'v2.9.7',
+        sha256: '1'.repeat(64),
+        source:
+          'https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-pc-windows-msvc.zip',
+      }),
+    );
+    expect(
+      (await fixture.manager.checkUpdates()).tools.map(({ tool, status }) => ({ tool, status })),
+    ).toEqual([
+      { tool: 'yt-dlp', status: 'current' },
+      { tool: 'runtime', status: 'error' },
+      { tool: 'ffmpeg', status: 'unmanaged' },
+    ]);
+  });
+  it('ignores invalid managed manifests and propagates cancellation before networking', async () => {
+    const fixture = await setup();
+    await fixture.manager.install('yt-dlp');
+    await fs.writeFile(path.join(fixture.managedDir, 'yt-dlp', 'managed.json'), '{broken');
+    fixture.request.mockClear();
+    expect((await fixture.manager.checkUpdates()).tools[0].status).toBe('unmanaged');
+    expect(fixture.request).not.toHaveBeenCalled();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(fixture.manager.checkUpdates({ signal: controller.signal })).rejects.toMatchObject(
+      { name: 'AbortError' },
+    );
+  });
   it('verifies an official executable before atomically replacing only the managed copy', async () => {
     const fixture = await setup();
     const previous = path.join(fixture.managedDir, 'yt-dlp');

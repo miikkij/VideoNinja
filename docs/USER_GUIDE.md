@@ -28,6 +28,50 @@ externally maintained official binary, the upstream channel-switch command is
 `yt-dlp --update-to nightly`; package-manager installations must use their own
 update method. Recheck tools afterward and confirm the displayed path/version.
 
+### Optional automatic maintenance
+
+Enable **Automatic tool updates** in Settings to check managed yt-dlp, Deno and
+ffmpeg/ffprobe once per day. It is off by default. Only tools already installed
+by VideoNinja are eligible; missing tools, external installations and guided
+macOS ffmpeg setup remain manual. The selected Stable/Nightly channel applies to
+yt-dlp. Changing it requests a new check, but automatic maintenance never moves
+yt-dlp or Deno to an older version. Use the manual update action for an intentional
+channel downgrade.
+
+Maintenance waits until downloads are idle or manually paused, active processes
+have stopped and previews are closed. New downloads stay blocked during the
+exclusive update operation. A busy queue is checked again later. Check attempts
+are saved before network requests, so restarting after a failed check does not
+cause repeated daily requests. The status shows the latest check and individual
+tool outcomes; one failed tool does not erase another tool's successful update.
+
+Current versions are not reinstalled. FFmpeg's moving `latest` release is compared
+by its official checksum. A failed download, verification or activation keeps or
+restores the earlier managed installation; if restoring it fails, its backup is
+retained for recovery. Turning automatic updates off cancels the operation and
+waits for cleanup. Manual installation and updates remain available.
+
+## Browser challenges and site cooldowns
+
+**Browser compatibility: Automatic** is the default download option. A recognized
+Cloudflare challenge triggers one retry using yt-dlp's supported generic browser
+impersonation mode. Metadata and the download share that attempt. **Off** disables
+the fallback; **Compatible** requests it immediately. Missing browser support has
+its own tool-update guidance. Cookie and login errors do not trigger this fallback.
+
+Successful compatibility is remembered for that exact site and yt-dlp version
+for seven days. Settings lists the remembered sites and can clear them. Private
+jobs neither use nor store these preferences. The app never chooses account
+cookies automatically. **Open source** lets you visit the job's page yourself;
+interactive CAPTCHA or login may still require your browser and selected cookies.
+
+HTTP 429 errors delay other waiting jobs for the same site, starting at 30 seconds
+and backing off to at most 15 minutes. That site then runs one download at a time
+for 15 minutes after its cooldown, while other sites can continue. Existing
+transfers are allowed to finish. The queue explains that the site requested a pause and
+the next retry time when available. Technical diagnostics start collapsed and
+can be opened or copied when needed.
+
 ## Instagram: login, unavailable content and access limits
 
 Use a direct post or Reel link and open the same link in your browser first.
